@@ -1,6 +1,7 @@
 """
 健康减肥助手功能函数库
 包含所有核心功能的独立函数
+加载所有用户档案、计算BMI及相关信息、创建新用户健康档案、保存所有用户档案到文件、显示用户档案详情、更新用户体重
 """
 
 import json
@@ -51,6 +52,28 @@ ALLERGEN_OPTIONS = {
     'K': '酒精'
 }
 
+
+def load_profiles() -> Dict[str, Any]:
+    """
+    加载所有用户档案
+
+    返回值:
+        Dict: 包含所有用户档案的字典
+    """
+    global USER_PROFILES
+
+    if os.path.exists(DATA_FILE):
+        try:
+            with open(DATA_FILE, 'r', encoding='utf-8') as f:
+                USER_PROFILES = json.load(f)
+                print(f"已加载 {len(USER_PROFILES)} 个用户档案")
+        except Exception as e:
+            print(f"加载用户档案时出错: {e}")
+            USER_PROFILES = {}
+    else:
+        USER_PROFILES = {}
+
+    return USER_PROFILES
 
 def get_valid_number_input(prompt: str, min_val: float, max_val: float) -> float:
     """
