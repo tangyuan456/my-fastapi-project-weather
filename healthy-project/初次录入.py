@@ -1,7 +1,7 @@
 """
 健康减肥助手功能函数库
 包含所有核心功能的独立函数
-加载所有用户档案、计算BMI及相关信息、创建新用户健康档案、保存所有用户档案到文件、显示用户档案详情、更新用户体重
+加载所有用户档案、计算BMI及相关信息、创建新用户健康档案、保存所有用户档案到文件、显示用户档案详情、更新用户体重、注销用户档案
 """
 
 import json
@@ -49,7 +49,9 @@ ALLERGEN_OPTIONS = {
     'H': '小麦/麸质',
     'I': '海鲜',
     'J': '芒果',
-    'K': '酒精'
+    'K': '酒精',
+    'L': '其他，自写',
+    'M': '无'
 }
 
 
@@ -354,8 +356,6 @@ def display_user_profile(user_data: Dict[str, Any]) -> None:
     allergens = user_data.get('allergens', [])
     if allergens:
         print(f"⚠️  过敏食物: {', '.join(allergens)}")
-    else:
-        print(f"⚠️  过敏食物: 无")
 
     # 备注
     if 'remarks' in user_data:
@@ -370,7 +370,7 @@ def display_user_profile(user_data: Dict[str, Any]) -> None:
     print("=" * 60)
 
 
-def update_user_weight(nickname: str) -> bool:
+def update_user_weight(nickname: str,new_weight: float) -> bool:
     """
     更新用户体重
 
@@ -391,7 +391,7 @@ def update_user_weight(nickname: str) -> bool:
 
         # 获取新体重
         new_weight = get_valid_number_input(
-            f"请输入新的体重(kg): ", 30, 300
+            new_weight, 30, 300
         )
 
         # 更新数据
@@ -426,3 +426,30 @@ def update_user_weight(nickname: str) -> bool:
         print(f"❌ 更新体重时出错: {e}")
         return False
 
+
+def delete_user_profile(nickname: str) -> bool:
+    """
+    注销用户档案
+
+    参数:
+        nickname: 用户昵称
+
+    返回值:
+        bool: 删除是否成功
+    """
+    if nickname not in USER_PROFILES:
+        print(f"❌ 你不叫 '{nickname}' ")
+        return False
+
+    confirm = input(f"确定要注销 '{nickname}' 吗？(y/N): ").lower()
+    if confirm == 'y':
+        del USER_PROFILES[nickname]
+        if save_profiles():
+            print(f"✅ 用户 '{nickname}' 已注销")
+            return True
+        else:
+            print("❌ 注销失败，无法保存数据")
+            return False
+    else:
+        print("❌ 注销操作已取消")
+        return False
