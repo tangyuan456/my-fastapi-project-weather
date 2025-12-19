@@ -7,8 +7,11 @@ import json
 import urllib3
 import io
 from contextlib import redirect_stdout
+
+from websocket import continuous_frame
+
 from 初次录入 import (load_profiles, save_profiles, create_user_profile, delete_user_profile,
-                      display_user_profile, update_user_weight, calculate_bmi, USER_PROFILES)
+                      search_user_profile, update_user_weight, calculate_bmi, USER_PROFILES)
 
 # 禁用SSL警告
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -82,8 +85,8 @@ class HealthAssistantBot:
             {
                 "type": "function",
                 "function": {
-                    "name": "display_my_profile",
-                    "description": "查看当前用户的健康档案详情",
+                    "name": "search_my_profile",
+                    "description": "可以获取用户的完整健康档案数据，包括身高、体重、BMI、体脂率等。当需要用户的健康信息来回答问题（如生成报告、制定计划）时，必须首先调用此工具。",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -101,7 +104,7 @@ class HealthAssistantBot:
                 "type": "function",
                 "function": {
                     "name": "calculate_bmi",
-                    "description": "计算BMI指数并给出健康建议",
+                    "description": "可以通过这个工具计算用户的BMI。当需要用户的健康信息来回答问题（如生成报告、制定计划）时，必须同时调用此工具。",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -146,9 +149,9 @@ class HealthAssistantBot:
                 你专门服务当前用户，功能包括：
                 1. 创建个人健康档案（如果用户还没有档案）
                 2. 更新个人体重信息
-                3. 查看个人健康数据
-                4. 计算BMI指数
-                5. 提供个性化减肥建议
+                3. 你有工具{search_my_profile}，可以查看个人健康数据，当用户的问题需要健康数据（如生成报告、计算BMI、制定计划）但对话中没有相关数据时，你必须主动调用工具获取数据。
+                4. 你有工具{calculate_bmi}，可以计算BMI指数，当用户咨询减肥或健身相关事项后，你要调用这个工具计算BMI，再结合结果回答用户问题。
+                5. 提供个性化减肥建议，先调用工具{search_my_profile}查看用户档案
                 6. 删除个人档案
 
                 请以亲密、专业的个人健康教练身份与用户交流，使用友好、鼓励的中文交流。
@@ -200,7 +203,7 @@ class HealthAssistantBot:
                     return "请输入有效的体重值。"
 
                 # 调用update_user_weight函数（注意：原函数需要nickname参数）
-                success = update_user_weight(user_nickname)
+                success = update_user_weight(user_nickname, new_weight)
                 if success:
                     self.users = load_profiles()  # 重新加载数据
                     current_weight = self.users[user_nickname]['current_weight_kg']
@@ -210,7 +213,7 @@ class HealthAssistantBot:
                 else:
                     return "❌ 更新体重失败。"
 
-            elif function_name == "display_my_profile":
+            elif function_name == "search_my_profile":
                 # 查看个人档案
                 if not self.check_user_exists():
                     return "您还没有创建健康档案，请先创建档案。"
@@ -221,7 +224,7 @@ class HealthAssistantBot:
                 # 调用显示函数并捕获输出
                 f = io.StringIO()
                 with redirect_stdout(f):
-                    display_user_profile(user_data)
+                    search_user_profile(user_data)
                 output = f.getvalue()
                 return f"📋 您的个人健康档案详情：\n{output}"
 
@@ -270,6 +273,9 @@ class HealthAssistantBot:
 
         # 1. 添加用户消息
         self.history.append({"role": "user", "content": user_input})
+
+        if user_input == "查看聊天历史":
+            print(self.display_history())
 
         # 2. 第一次调用AI
         print("🤖 AI分析用户需求...")
@@ -371,9 +377,6 @@ class HealthAssistantBot:
                     continue
                 elif user_input == "帮助":
                     self.show_help()
-                    continue
-                elif user_input == "查看聊天历史":
-                    self.display_history()
                     continue
                 elif user_input == "清空":
                     self.clear_history()

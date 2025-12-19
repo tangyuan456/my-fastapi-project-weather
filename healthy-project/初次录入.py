@@ -305,7 +305,7 @@ def save_profiles() -> bool:
         print(f"保存用户档案时出错: {e}")
         return False
 
-def display_user_profile(user_data: Dict[str, Any]) -> None:
+def search_user_profile(user_data: Dict[str, Any]) -> None:
     """
     显示用户档案详情
 
@@ -370,7 +370,7 @@ def display_user_profile(user_data: Dict[str, Any]) -> None:
     print("=" * 60)
 
 
-def update_user_weight(nickname: str,new_weight: float) -> bool:
+def update_user_weight(nickname:str,new_weight: float) -> bool:
     """
     更新用户体重
 
@@ -388,11 +388,6 @@ def update_user_weight(nickname: str,new_weight: float) -> bool:
         # 显示当前信息
         current_weight = USER_PROFILES[nickname]['current_weight_kg']
         print(f"当前体重: {current_weight}kg")
-
-        # 获取新体重
-        new_weight = get_valid_number_input(
-            new_weight, 30, 300
-        )
 
         # 更新数据
         old_weight = current_weight

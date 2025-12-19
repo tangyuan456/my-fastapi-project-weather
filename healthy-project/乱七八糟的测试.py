@@ -23,6 +23,29 @@ def test_gaode_api():
     except Exception as e:
         print(f"错误: {str(e)}")
 
+def get_valid_number_input(prompt: str, min_val: float, max_val: float) -> float:
+    """
+    获取有效的数字输入
+
+    参数:
+        prompt: 提示文本
+        min_val: 最小值
+        max_val: 最大值
+
+    返回值:
+        float: 有效的数字
+    """
+    while True:
+        try:
+            value = float(input(prompt))
+            if min_val <= value <= max_val:
+                print(value)
+                return value
+            else:
+                print(f"请输入 {min_val} 到 {max_val} 之间的数字")
+        except ValueError:
+            print("请输入有效的数字")
+
 
 if __name__ == "__main__":
-    test_gaode_api()
+    get_valid_number_input("输入你的体重",30,200)
