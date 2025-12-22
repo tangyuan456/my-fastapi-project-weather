@@ -1,3 +1,4 @@
+import datetime
 from idlelib import history
 
 import httpx
@@ -12,6 +13,7 @@ from websocket import continuous_frame
 
 from 初次录入 import (load_profiles, save_profiles, create_user_profile, delete_user_profile,
                       search_user_profile, update_user_weight, calculate_bmi, USER_PROFILES)
+from 每日记录相关函数 import DailyHealthRecorder
 
 # 禁用SSL警告
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -23,6 +25,7 @@ class HealthAssistantBot:
     def __init__(self, qwen_api_key: str):
         self.qwen_api_key = qwen_api_key
         self.current_user = None  # 当前登录的用户
+        self.recorder = DailyHealthRecorder()
 
         # 创建不验证SSL的HTTP客户端
         ssl_context = ssl.create_default_context()
@@ -46,47 +49,13 @@ class HealthAssistantBot:
         self.users = load_profiles()
 
         # 定义工具 - 健康减肥相关功能
+        # 在 __init__ 方法中修改工具描述
         self.tools = [
             {
                 "type": "function",
                 "function": {
-                    "name": "create_health_profile",
-                    "description": "创建健康档案，收集用户的基本健康信息",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "action": {
-                                "type": "string",
-                                "description": "执行的动作，固定为'create'",
-                                "enum": ["create"]
-                            }
-                        },
-                        "required": ["action"],
-                    },
-                },
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "update_user_weight",
-                    "description": "更新当前用户的体重信息",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "new_weight": {
-                                "type": "number",
-                                "description": "新的体重值（kg）",
-                            }
-                        },
-                        "required": ["new_weight"],
-                    },
-                },
-            },
-            {
-                "type": "function",
-                "function": {
                     "name": "search_my_profile",
-                    "description": "可以获取用户的完整健康档案数据，包括身高、体重、BMI、体脂率等。当需要用户的健康信息来回答问题（如生成报告、制定计划）时，必须首先调用此工具。",
+                    "description": "【必须优先调用】获取用户的完整健康档案数据，包括身高、体重、BMI、体脂率等。当需要用户的健康信息来回答问题时，必须首先调用此工具获取基础数据。",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -104,7 +73,7 @@ class HealthAssistantBot:
                 "type": "function",
                 "function": {
                     "name": "calculate_bmi",
-                    "description": "可以通过这个工具计算用户的BMI。当需要用户的健康信息来回答问题（如生成报告、制定计划）时，必须同时调用此工具。",
+                    "description": "【经常与search_my_profile一起调用】计算用户的BMI指数。在获取用户档案数据后，通常需要调用此工具计算最新的BMI。",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -118,6 +87,41 @@ class HealthAssistantBot:
                             }
                         },
                         "required": ["weight", "height"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "update_user_weight",
+                    "description": "更新当前用户的体重信息。调用此工具后会触发重新计算BMI。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "new_weight": {
+                                "type": "number",
+                                "description": "新的体重值（kg）",
+                            }
+                        },
+                        "required": ["new_weight"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "create_health_profile",
+                    "description": "创建健康档案，收集用户的基本健康信息",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "action": {
+                                "type": "string",
+                                "description": "执行的动作，固定为'create'",
+                                "enum": ["create"]
+                            }
+                        },
+                        "required": ["action"],
                     },
                 },
             },
@@ -141,23 +145,66 @@ class HealthAssistantBot:
             }
         ]
 
+        # 修改系统提示
         self.history = [
             {
                 "role": "system",
                 "content": """你是一对一健康减肥助手AI。你的任务是专门为当前用户管理健康档案、跟踪减肥进度、提供健康建议。
 
-                你专门服务当前用户，功能包括：
-                1. 创建个人健康档案（如果用户还没有档案）
-                2. 更新个人体重信息
-                3. 你有工具{search_my_profile}，可以查看个人健康数据，当用户的问题需要健康数据（如生成报告、计算BMI、制定计划）但对话中没有相关数据时，你必须主动调用工具获取数据。
-                4. 你有工具{calculate_bmi}，可以计算BMI指数，当用户咨询减肥或健身相关事项后，你要调用这个工具计算BMI，再结合结果回答用户问题。
-                5. 提供个性化减肥建议，先调用工具{search_my_profile}查看用户档案
-                6. 删除个人档案
+        **重要指令：**
+        1. **多工具调用策略**：当用户的问题需要多个数据时，你应该一次性调用多个工具。例如：
+           - 用户问"我的健康状况怎么样？" → 同时调用 `search_my_profile` 和 `calculate_bmi`
+           - 用户提供新体重"今天体重65kg" → 调用 `update_user_weight`，然后自动调用 `calculate_bmi`
 
-                请以亲密、专业的个人健康教练身份与用户交流，使用友好、鼓励的中文交流。
-                始终关注当前用户的个人健康数据，提供个性化建议。"""
+        2. **工具调用顺序**：
+           a. 首先检查是否需要用户数据 → 调用 `search_my_profile`
+           b. 然后检查是否需要计算 → 调用 `calculate_bmi`
+           c. 最后生成个性化建议
+
+        3. **执行流程**：
+           - 检查当前日期文件是否存在
+           - 获取用户问题
+           - 分析需要哪些数据
+           - 一次性调用所有必要的工具
+           - 整合所有工具结果
+           - 生成最终回复
+
+        4. **工具依赖关系**：
+           - `search_my_profile` 通常是第一步
+           - `calculate_bmi` 通常需要身高体重数据
+           - `update_user_weight` 后通常需要重新计算BMI
+
+        请以亲密、专业的个人健康教练身份与用户交流，使用友好、鼓励的中文交流。
+        始终关注当前用户的个人健康数据，提供个性化建议。"""
             }
         ]
+
+    def _init_daily_system(self):
+        """初始化每日系统"""
+        print("📅 正在初始化今日健康系统...")
+
+        # 检查是否有今日记录
+        if not self.recorder.check_today_record_exists():
+            print("📝 创建新的一日记录")
+
+        # 获取用户档案（如果有的话）
+        user_profile = None
+        if self.check_user_exists():
+            user_nickname = self.get_current_user()
+            if user_nickname in self.users:
+                user_profile = self.users[user_nickname]
+
+        # 自动生成今日计划（使用大模型）
+        success = self.recorder.auto_generate_daily_plan(self.client, user_profile)
+
+        if success:
+            print("🎯 AI已为您生成个性化健康计划！")
+        else:
+            print("⚠️ 自动生成计划失败，您可以手动设置或使用默认计划")
+
+        # 显示当前喝水状态
+        data = self.recorder.load_today_record()
+        print(f"💧 今日喝水目标: {data.get('drink_plan', 8)}杯")
 
     def check_user_exists(self) -> bool:
         """检查是否有用户档案存在"""
@@ -271,27 +318,43 @@ class HealthAssistantBot:
         print(f"\n{'=' * 50}")
         print(f"用户: {user_input}")
 
-        # 1. 添加用户消息
+        # 添加用户消息
         self.history.append({"role": "user", "content": user_input})
 
         if user_input == "查看聊天历史":
             print(self.display_history())
+            return "这是您的聊天历史..."
 
-        # 2. 第一次调用AI
-        print("🤖 AI分析用户需求...")
-        response = self.client.chat.completions.create(
-            model="qwen-turbo",
-            messages=self.history,
-            tools=self.tools,
-            tool_choice="auto"
-        )
+        # 使用流式处理，支持多轮工具调用
+        max_iterations = 3  # 防止无限循环
+        iteration_count = 0
 
-        ai_message = response.choices[0].message
-        self.history.append(ai_message)
+        while iteration_count < max_iterations:
+            iteration_count += 1
+            print(f"\n🤖 AI思考第{iteration_count}轮...")
 
-        # 3. 检查工具调用
-        if ai_message.tool_calls:
-            print("🔧 AI决定调用工具！")
+            # 调用AI
+            response = self.client.chat.completions.create(
+                model="qwen-turbo",
+                messages=self.history,
+                tools=self.tools,
+                tool_choice="auto"
+            )
+
+            ai_message = response.choices[0].message
+            self.history.append(ai_message)
+
+            # 如果没有工具调用，直接返回
+            if not ai_message.tool_calls:
+                final_reply = ai_message.content
+                self.history.append({"role": "assistant", "content": final_reply})
+                print(f"AI: {final_reply[:100]}...")
+                print(f"{'=' * 50}")
+                return final_reply
+
+            # 执行所有工具调用
+            print(f"🔧 AI决定调用{len(ai_message.tool_calls)}个工具！")
+            all_tool_results = []
 
             for tool_call in ai_message.tool_calls:
                 # 解析参数
@@ -300,32 +363,37 @@ class HealthAssistantBot:
 
                 # 执行工具
                 tool_result = self._execute_tool(function_name, arguments)
-                print(f"✅ 工具执行结果: {tool_result[:100]}...")
+                print(f"✅ 工具[{function_name}]执行完成")
 
-                # 添加工具响应
+                # 收集结果
+                all_tool_results.append({
+                    "tool_call_id": tool_call.id,
+                    "function_name": function_name,
+                    "result": tool_result
+                })
+
+                # 添加工具响应到历史
                 self.history.append({
                     "role": "tool",
                     "tool_call_id": tool_call.id,
                     "content": tool_result,
                 })
 
-            # 第二次调用AI（整合结果）
-            print("🤖 AI整合信息生成回复...")
-            second_response = self.client.chat.completions.create(
-                model="qwen-turbo",
-                messages=self.history,
-            )
+            # 如果是最后一轮，让AI整合结果
+            if iteration_count >= max_iterations :
+                print("🤖 AI整合所有工具结果生成回复...")
+                final_response = self.client.chat.completions.create(
+                    model="qwen-turbo",
+                    messages=self.history,
+                )
+                final_reply = final_response.choices[0].message.content
+                self.history.append({"role": "assistant", "content": final_reply})
+                print(f"AI: {final_reply[:100]}...")
+                print(f"{'=' * 50}")
+                return final_reply
 
-            final_message = second_response.choices[0].message
-            final_reply = final_message.content
-        else:
-            final_reply = ai_message.content
-
-        # 4. 记录并返回
-        self.history.append({"role": "assistant", "content": final_reply})
-        print(f"AI: {final_reply[:100]}...")
-        print(f"{'=' * 50}")
-        return final_reply
+        # 达到最大轮次，返回默认回复
+        return "我已经为您处理了相关数据，还有什么可以帮助您的吗？"
 
     def interactive_chat(self):
         """交互式聊天"""
@@ -342,9 +410,10 @@ class HealthAssistantBot:
         if self.check_user_exists():
             user_nickname = self.get_current_user()
             print(f"\n👋 欢迎回来，{user_nickname}！")
+            current_time = datetime.datetime.now().strftime("%Y-%m-%d")
             self.history.append({
                 "role": "system",
-                "content": f"当前用户是：{user_nickname}。请以专属健康教练的身份为他/她服务。"
+                "content": f"当前用户是：{user_nickname}。今天的时间是：{current_time}，请以专属健康教练的身份为他/她服务。"
             })
         else:
             print("\n👋 欢迎新朋友！您还没有健康档案，让我们一起来创建档案吧。")
@@ -356,6 +425,8 @@ class HealthAssistantBot:
                 print(f"✅ 成功创建您的个人健康档案！欢迎 {self.current_user}，从现在开始我会陪伴您的健康减肥之旅！")
             else:
                 print("❌ 创建健康档案失败或您取消了操作。")
+
+        self._init_daily_system()
 
         print("💡 输入'退出'结束对话,'菜单'可以查看服务列表，'清空'可以清空掉所有聊天记录，'查看聊天历史'可以查看你和小助手的所有对话，")
         print("=" * 50)
@@ -486,10 +557,67 @@ class HealthAssistantBot:
         print(help_text)
 
     def display_history(self):
-        if history:
-            print(history)
-        else:
-            print("can't find history")
+        """显示所有聊天历史记录"""
+        if not self.history:
+            print("暂无聊天历史记录")
+            return
+
+        print("\n" + "=" * 60)
+        print("📜 聊天历史记录")
+        print("=" * 60)
+
+        for i, message in enumerate(self.history):
+            try:
+                # 跳过系统消息
+                if isinstance(message, dict):
+                    role = message.get("role", "")
+                    if role == "system":
+                        continue
+
+                    if role == "user":
+                        content = message.get("content", "")
+                        print(f"\n👤 您: {content}")
+                    elif role == "assistant":
+                        content = message.get("content", "")
+                        if not content and "tool_calls" in message:
+                            print(f"\n🤖 助手: [调用了工具]")
+                        elif content:
+                            if len(content) > 200:
+                                content = content[:200] + "..."
+                            print(f"\n🤖 助手: {content}")
+                    elif role == "tool":
+                        content = message.get("content", "")
+                        if len(content) > 100:
+                            content = content[:100] + "..."
+                        print(f"\n🔧 工具结果: {content}")
+
+                # 处理OpenAI对象格式
+                elif hasattr(message, 'role'):
+                    if message.role == "system":
+                        continue
+
+                    if message.role == "user":
+                        content = getattr(message, 'content', '')
+                        print(f"\n👤 您: {content}")
+                    elif message.role == "assistant":
+                        content = getattr(message, 'content', '')
+                        if not content and hasattr(message, 'tool_calls') and message.tool_calls:
+                            print(f"\n🤖 助手: [调用了工具]")
+                        elif content:
+                            if len(content) > 200:
+                                content = content[:200] + "..."
+                            print(f"\n🤖 助手: {content}")
+                    elif message.role == "tool":
+                        content = getattr(message, 'content', '')
+                        if len(content) > 100:
+                            content = content[:100] + "..."
+                        print(f"\n🔧 工具结果: {content}")
+
+            except Exception as e:
+                print(f"\n⚠️  消息{i}显示异常: {e}")
+                print(f"消息内容: {message}")
+
+        print("=" * 60 + "\n")
 
     def clear_history(self):
         """清空对话历史"""
@@ -518,13 +646,27 @@ class HealthAssistantBot:
                     "role": "system",
                     "content": """你是一对一健康减肥助手AI。你的任务是专门为当前用户管理健康档案、跟踪减肥进度、提供健康建议。
 
-                    你专门服务当前用户，功能包括：
-                    1. 创建个人健康档案（如果用户还没有档案）
-                    2. 更新个人体重信息
-                    3. 查看个人健康数据
-                    4. 计算BMI指数
-                    5. 提供个性化减肥建议
-                    6. 删除个人档案
+                    **重要指令：**
+                    1. **多工具调用策略**：当用户的问题需要多个数据时，你应该一次性调用多个工具。例如：
+                       - 用户问"我的健康状况怎么样？" → 同时调用 `search_my_profile` 和 `calculate_bmi`
+                       - 用户提供新体重"今天体重65kg" → 调用 `update_user_weight`，然后自动调用 `calculate_bmi`
+
+                    2. **工具调用顺序**：
+                       a. 首先检查是否需要用户数据 → 调用 `search_my_profile`
+                       b. 然后检查是否需要计算 → 调用 `calculate_bmi`
+                       c. 最后生成个性化建议
+
+                    3. **执行流程**：
+                       - 获取用户问题
+                       - 分析需要哪些数据
+                       - 一次性调用所有必要的工具
+                       - 整合所有工具结果
+                       - 生成最终回复
+
+                    4. **工具依赖关系**：
+                       - `search_my_profile` 通常是第一步
+                       - `calculate_bmi` 通常需要身高体重数据
+                       - `update_user_weight` 后通常需要重新计算BMI
 
                     请以亲密、专业的个人健康教练身份与用户交流，使用友好、鼓励的中文交流。
                     始终关注当前用户的个人健康数据，提供个性化建议。"""

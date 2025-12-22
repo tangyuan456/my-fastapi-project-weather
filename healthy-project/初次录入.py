@@ -54,6 +54,18 @@ ALLERGEN_OPTIONS = {
     'M': '无'
 }
 
+MOVEMENT_OPTIONS={
+    'A': '慢跑',
+    'B': '跳绳',
+    'C': '瑜伽',
+    'D': '游泳',
+    'E': '自行车骑行',
+    'F': '健身操',
+    'G': '羽毛球',
+    'H': '舞蹈',
+    'L': '其他，自填',
+    'M': '随便，我都可以'
+}
 
 def load_profiles() -> Dict[str, Any]:
     """
@@ -259,8 +271,17 @@ def create_user_profile() -> Optional[Dict[str, Any]]:
         )
         user_data['allergens'] = allergen_list
 
-        # 11. 其他备注
-        print("\n9. 其他备注（可选）:")
+
+
+        # 11. 运动偏好
+        print("\n9. 运动偏好（可选）")
+        movement_list = get_multiple_choice_input(
+            "   请选择你喜欢的运动方式（可多选）:", MOVEMENT_OPTIONS, allow_multiple=True
+        )
+        user_data['move_prefer'] = movement_list
+
+        # 12. 其他备注
+        print("\n10. 其他备注（可选）:")
         print("   如：特殊疾病史、服药情况、运动限制等")
         remarks = input("请输入备注（如无可直接回车）: ").strip()
         if remarks:
