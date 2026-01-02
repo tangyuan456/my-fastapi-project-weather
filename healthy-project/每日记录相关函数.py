@@ -58,6 +58,10 @@ class DailyHealthRecorder:
                 },
                 "drink_number": 0,  # 当前喝水杯数
                 "drink_plan": 8,  # 目标喝水杯数（假设8杯）
+                "早餐状态":"没吃",
+                "午餐状态": "没吃",
+                "晚餐状态": "没吃",
+                "运动状态": "没运动",
                 "daily_history": [],  # 当日对话历史
                 "summary": "",  # 当日总结
                 "last_updated": datetime.datetime.now().isoformat()

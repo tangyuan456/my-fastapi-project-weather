@@ -239,6 +239,21 @@ def create_user_profile() -> Optional[Dict[str, Any]]:
             "5. 请输入您当前的体重(kg，例如：65.2): ", 30, 300
         )
         user_data['current_weight_kg'] = weight
+        try:
+            # 创建体重记录JSON文件
+            weight_history_file = f"weight_history_{nickname}.json"
+            initial_data = {
+                "user": nickname,
+                "history": []  # 初始为空列表
+            }
+
+            # 写入文件
+            with open(weight_history_file, 'w', encoding='utf-8') as f:
+                json.dump(initial_data, f, ensure_ascii=False, indent=2)
+
+            print(f"✅ 已创建体重记录文件: {weight_history_file}")
+        except Exception as e:
+            print(f"⚠️  创建体重记录文件失败: {e}")
 
         # 6. 计算BMI
         bmi_info = calculate_bmi(weight, height)
@@ -425,6 +440,46 @@ def update_user_weight(nickname:str,new_weight: float) -> bool:
             weight_to_lose = new_weight - target
             USER_PROFILES[nickname]['weight_to_lose'] = round(abs(weight_to_lose), 1)
 
+        #把新数据计入档案
+        try:
+            weight_history_file = f"weight_history_{nickname}.json"
+
+            # 如果文件不存在，创建初始文件
+            if not os.path.exists(weight_history_file):
+                print(f"📄 体重记录文件不存在，创建新文件...")
+                initial_data = {
+                    "user": nickname,
+                    "history": [],
+                    "created_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                }
+                with open(weight_history_file, 'w', encoding='utf-8') as f:
+                    json.dump(initial_data, f, ensure_ascii=False, indent=2)
+                print(f"✅ 已创建体重记录文件: {weight_history_file}")
+
+            # 读取现有数据
+            with open(weight_history_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+
+            # 添加新的记录
+            new_record = {
+                "up_date": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "weight_kg": new_weight,
+                "bmi": USER_PROFILES[nickname]['bmi'],
+                "status": USER_PROFILES[nickname]['status']
+            }
+
+            data["history"].append(new_record)
+
+            # 保存回文件
+            with open(weight_history_file, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+
+            print(f"📝 体重记录已保存到: {weight_history_file}")
+
+        except Exception as e:
+            print(f"⚠️  保存体重记录失败: {e}")
+            # 不阻止主流程，只是记录失败
+
         # 更新时间戳
         USER_PROFILES[nickname]['last_update'] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -459,6 +514,43 @@ def delete_user_profile(nickname: str) -> bool:
 
     confirm = input(f"确定要注销 '{nickname}' 吗？(y/N): ").lower()
     if confirm == 'y':
+        try:
+            # 要删除的文件列表
+            files_to_delete = []
+
+            # 1. 体重记录文件（固定格式）
+            weight_file = f"weight_history_{nickname}.json"
+            if os.path.exists(weight_file):
+                files_to_delete.append(weight_file)
+
+            # 2. 每日记录文件（所有日期格式的json文件）
+            import glob
+            # 匹配格式：YYYY-MM-DD.json
+            daily_files = glob.glob("????-??-??.json")
+            files_to_delete.extend(daily_files)
+
+            # 3. 显示要删除的文件
+            if files_to_delete:
+                print(f"\n🗑️  将删除以下 {len(files_to_delete)} 个数据文件:")
+                for i, file in enumerate(files_to_delete, 1):
+                    print(f"  {i}. {file}")
+
+                # 确认是否删除文件
+                file_confirm = input(f"\n确认删除这些文件吗？(y/N): ").lower()
+                if file_confirm == 'y':
+                    # 删除所有文件
+                    for file in files_to_delete:
+                        try:
+                            os.remove(file)
+                            print(f"✅ 已删除: {file}")
+                        except Exception as e:
+                            print(f"❌ 删除失败 {file}: {e}")
+                    print(f"✅ 所有相关数据文件已删除")
+                else:
+                    print("⚠️  文件保留，仅删除用户档案")
+        except Exception as e:
+            print(f"⚠️  清理文件时出错: {e}")
+
         del USER_PROFILES[nickname]
         if save_profiles():
             print(f"✅ 用户 '{nickname}' 已注销")

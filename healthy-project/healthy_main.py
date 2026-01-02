@@ -188,19 +188,19 @@ class HealthAssistantBot:
             print("📝 创建新的一日记录")
 
         # 获取用户档案（如果有的话）
-        user_profile = None
-        if self.check_user_exists():
-            user_nickname = self.get_current_user()
-            if user_nickname in self.users:
-                user_profile = self.users[user_nickname]
+            user_profile = None
+            if self.check_user_exists():
+                user_nickname = self.get_current_user()
+                if user_nickname in self.users:
+                    user_profile = self.users[user_nickname]
 
-        # 自动生成今日计划（使用大模型）
-        success = self.recorder.auto_generate_daily_plan(self.client, user_profile)
+            # 自动生成今日计划（使用大模型）
+            success = self.recorder.auto_generate_daily_plan(self.client, user_profile)
 
-        if success:
-            print("🎯 AI已为您生成个性化健康计划！")
-        else:
-            print("⚠️ 自动生成计划失败，您可以手动设置或使用默认计划")
+            if success:
+                print("🎯 AI已为您生成个性化健康计划！")
+            else:
+                print("⚠️ 自动生成计划失败，您可以手动设置或使用默认计划")
 
         # 显示当前喝水状态
         data = self.recorder.load_today_record()
@@ -433,6 +433,42 @@ class HealthAssistantBot:
 
         while True:
             try:
+                # 获取当前时间
+                time = datetime.datetime.now()
+                time_hour = time.hour
+
+                # 判断时间段
+                if 6 <= time_hour < 10:
+                    cul = "早上"
+                elif 10 <= time_hour < 15:
+                    cul = "中午"
+                elif 15 <= time_hour < 23:
+                    cul = "晚上"
+                else:
+                    cul = "凌晨"
+
+                # 根据时间段执行不同操作
+                if cul == "早上":
+                    ask=f'''早上好！新的一天开始了！ ☀️
+                           一定要记得吃营养早餐哦！吃饱了才有力气迎接今天的挑战！
+                          所以你吃早餐了吗？'''
+                elif cul == "中午":
+                    ask=f'''中午好！午间时光~ 🌞
+                          不要因为忙碌就忘记吃饭！好好吃饭才能保持下午的精力充沛。
+                          你吃午饭了吗？'''
+                elif cul == "晚上":
+                    ask=f'''晚上好！今天一天幸苦啦~ 🌙
+                          晚餐吃过了吗？ 晚上要吃清淡一些，但营养也不能少哦！好好享受晚餐时光，犒劳一下辛苦一天的自己。'''
+                else:
+                    ask=f'''这么晚了怎么还没睡呢？ 🌃
+                          要早点休息哦！长期熬夜对身体的影响很大：
+                          皮肤变差：会让皮肤暗沉、长痘痘
+                          记忆力下降：大脑得不到充分休息
+                          心脏负担：增加心血管疾病风险
+                          容易发胖：代谢会紊乱
+                          快放下手机，好好休息吧！ 😴
+                          晚安，好梦~明天见！'''
+                print(ask)
                 user_input = input("\n您：").strip()
 
                 if not user_input:
@@ -714,7 +750,6 @@ def main():
             test_basic_functions()
             return
         elif sys.argv[1] == "api":
-            # 这里替换成你的API Key
             qwen_api_key = "sk-346cd33207e54d4298fc8c5e64210eca"
             bot = HealthAssistantBot(qwen_api_key)
             bot.interactive_chat()
@@ -723,24 +758,9 @@ def main():
     # 交互式选择模式
     print("🏥 一对一健康减肥助手")
     print("=" * 50)
-#    print("1. 🧪 测试模式 - 快速测试基本功能")
-    print("2. 💬 对话模式 - 交互式专属健康教练")
-    print("3. 🚪 退出")
-    print("=" * 50)
-
-    choice = input("请选择模式 (1-3): ").strip()
-
-#    if choice == "1":
-#        test_basic_functions()
-    if choice == "2":
-        # 这里需要替换成你的API Key
-        qwen_api_key = "sk-346cd33207e54d4298fc8c5e64210eca"
-        bot = HealthAssistantBot(qwen_api_key)
-        bot.interactive_chat()
-    elif choice == "3":
-        print("👋 再见！")
-    else:
-        print("❌ 无效选择")
+    qwen_api_key = "sk-346cd33207e54d4298fc8c5e64210eca"
+    bot = HealthAssistantBot(qwen_api_key)
+    bot.interactive_chat()
 
 
 if __name__ == "__main__":
