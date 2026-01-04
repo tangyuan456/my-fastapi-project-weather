@@ -15,6 +15,8 @@ from 初次录入 import (load_profiles, save_profiles, create_user_profile, del
                       search_user_profile, update_user_weight, calculate_bmi, USER_PROFILES)
 from 每日记录相关函数 import DailyHealthRecorder
 
+from 饮食相关函数 import (update_meal_status,get_daily_plan)
+
 # 禁用SSL警告
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -26,6 +28,8 @@ class HealthAssistantBot:
         self.qwen_api_key = qwen_api_key
         self.current_user = None  # 当前登录的用户
         self.recorder = DailyHealthRecorder()
+        self.update_meal_status = update_meal_status.__get__(self, HealthAssistantBot)
+        self.get_daily_plan = get_daily_plan.__get__(self, HealthAssistantBot)
 
         # 创建不验证SSL的HTTP客户端
         ssl_context = ssl.create_default_context()
@@ -142,6 +146,46 @@ class HealthAssistantBot:
                         "required": ["action"],
                     },
                 },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "update_meal_status",
+                    "description": "【重要！用户报告用餐情况时必须调用】当用户报告吃了早餐/午餐/晚餐时，自动识别时间并更新对应餐次的状态。调用此工具可以记录用户的用餐情况。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "user_input": {
+                                "type": "string",
+                                "description": "用户描述用餐情况的完整输入文本",
+                            },
+                            "meal_type": {
+                                "type": "string",
+                                "description": "用餐类型。如果用户明确说了就传入明确值；如果不确定，让AI自行判断并传入'auto'",
+                                "enum": ["早餐", "午餐", "晚餐", "auto"]
+                            }
+                        },
+                        "required": ["user_input", "meal_type"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_daily_plan",
+                    "description": "获取用户当前时间段对应的饮食和运动计划。工具会根据当前时间自动判断是早餐、午餐还是晚餐时间，并返回相应的计划。也可以查看饮水目标和运动计划。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "view_type": {
+                                "type": "string",
+                                "description": "查看的类型：'current_meal'只查看当前餐次的计划，'next_meal'查看下一餐的计划，'all'查看全天计划，'drink'查看饮水计划，'exercise'查看运动计划",
+                                "enum": ["current_meal", "next_meal", "all", "drink", "exercise"]
+                            }
+                        },
+                        "required": ["view_type"],
+                    },
+                },
             }
         ]
 
@@ -173,6 +217,21 @@ class HealthAssistantBot:
            - `search_my_profile` 通常是第一步
            - `calculate_bmi` 通常需要身高体重数据
            - `update_user_weight` 后通常需要重新计算BMI
+           
+        **重要时间判断规则：**
+        1. **用餐时间判断**（基于北京时间）：
+           - 早餐时间：5:00-10:59（早上5点到10点59分）
+           - 午餐时间：11:00-15:59（上午11点到下午3点59分）
+           - 晚餐时间：16:00-21:59（下午4点到晚上9点59分）
+           - 宵夜时间：22:00-4:59（晚上10点到第二天凌晨4点59分）
+        
+        2. **当前时间判断**：你需要根据对话发生的实际时间来判断用餐类型。
+        
+        **工具调用规则：**
+        1. 当用户报告用餐情况时，必须调用 `update_meal_status` 工具
+        2. 根据当前时间自动判断meal_type：
+           - 如果当前时间在晚餐时间，meal_type传"晚餐"
+           - 如果当前时间在宵夜时间，meal_type传"auto"（让函数自动判断为"宵夜"）
 
         请以亲密、专业的个人健康教练身份与用户交流，使用友好、鼓励的中文交流。
         始终关注当前用户的个人健康数据，提供个性化建议。"""
@@ -221,6 +280,10 @@ class HealthAssistantBot:
         """执行工具函数并返回结果"""
         print(f"🔧 执行工具: {function_name}")
         print(f"📋 参数: {arguments}")
+
+        if function_name == "update_meal_status":
+            print(f"🕐 当前时间：{datetime.datetime.now().strftime('%H:%M:%S')}")
+            print(f"🔍 检查方法是否存在：{hasattr(self, 'update_meal_status')}")
 
         try:
             if function_name == "create_health_profile":
@@ -305,6 +368,83 @@ class HealthAssistantBot:
                     return f"✅ 您的健康档案已删除。如需重新开始，可以创建新的健康档案。"
                 else:
                     return f"❌ 删除档案失败。"
+
+            elif function_name == "update_meal_status":
+                # 调用update_meal_status方法
+                if hasattr(self, 'update_meal_status'):
+
+                    # 获取参数
+                    user_input = arguments.get("user_input", "")
+                    meal_type = arguments.get("meal_type", "auto")
+                    print(f"🔍 传入参数：user_input='{user_input}', meal_type='{meal_type}'")
+
+                    # 调用方法
+                    print(f"🔍 开始调用 self.update_meal_status()...")
+                    result = self.update_meal_status(user_input, meal_type)
+                    print(f"🔍 update_meal_status返回结果类型：{type(result)}")
+                    print(f"🔍 update_meal_status返回结果内容：{result}")
+
+                    # 格式化返回结果
+                    if isinstance(result, dict):
+                        # 构建友好回复
+                        response = result.get("message", "✅ 用餐状态已更新")
+                        if "current_status" in result:
+                            status = result["current_status"]
+                            response += f"\n\n📊 当前用餐状态："
+                            for meal, stat in status.items():
+                                response += f"\n  • {meal}: {stat}"
+                        if "next_action" in result:
+                            response += f"\n\n{result['next_action']}"
+
+                        if result.get("success"):
+                            print(f"✅ update_meal_status执行成功！")
+                            # 重新加载用户数据检查
+                            self.users = load_profiles()
+                            user_nickname = self.get_current_user()
+                            if user_nickname and self.users.get(user_nickname):
+                                user_profile = self.users[user_nickname]
+                                print(f"🔍 检查档案更新：早餐状态={user_profile.get('早餐状态', '没吃')}, "
+                                      f"午餐状态={user_profile.get('午餐状态', '没吃')}, "
+                                      f"晚餐状态={user_profile.get('晚餐状态', '没吃')}")
+
+                        return response
+                    else:
+                        return str(result)
+                else:
+                    return "❌ update_meal_status工具不可用"
+
+            elif function_name == "get_daily_plan":
+                # 调用get_daily_plan方法
+                if hasattr(self, 'get_daily_plan'):
+                    # 获取参数
+                    view_type = arguments.get("view_type", "current_meal")
+
+                    # 调用方法
+                    result = self.get_daily_plan(view_type)
+
+                    # 格式化返回结果
+                    if isinstance(result, dict):
+                        if result.get("success"):
+                            response = result.get("message", "📋 您的计划：")
+                            if "plan" in result:
+                                plan = result["plan"]
+                                if isinstance(plan, list):
+                                    for item in plan:
+                                        response += f"\n  • {item}"
+                                else:
+                                    response += f"\n  • {plan}"
+                            if "meal_status" in result:
+                                status = result["meal_status"]
+                                response += f"\n\n🍽️ 用餐状态："
+                                for meal, stat in status.items():
+                                    response += f"\n  • {meal}: {stat}"
+                            return response
+                        else:
+                            return result.get("message", "❌ 获取计划失败")
+                    else:
+                        return str(result)
+                else:
+                    return "❌ get_daily_plan工具不可用"
 
             else:
                 return f"未知的工具函数: {function_name}"
@@ -430,45 +570,33 @@ class HealthAssistantBot:
 
         print("💡 输入'退出'结束对话,'菜单'可以查看服务列表，'清空'可以清空掉所有聊天记录，'查看聊天历史'可以查看你和小助手的所有对话，")
         print("=" * 50)
+        try:
+            # 获取当前时间
+            time = datetime.datetime.now()
+            time_hour = time.hour
 
-        while True:
-            try:
-                # 获取当前时间
-                time = datetime.datetime.now()
-                time_hour = time.hour
+            # 判断时间段
+            if 6 <= time_hour < 10:
+                cul = "早上"
+            elif 10 <= time_hour < 15:
+                cul = "中午"
+            elif 15 <= time_hour < 23:
+                cul = "晚上"
+            else:
+                cul = "凌晨"
 
-                # 判断时间段
-                if 6 <= time_hour < 10:
-                    cul = "早上"
-                elif 10 <= time_hour < 15:
-                    cul = "中午"
-                elif 15 <= time_hour < 23:
-                    cul = "晚上"
-                else:
-                    cul = "凌晨"
+            # 根据时间段执行不同操作
+            if cul == "早上":
+                ask = f'''早上好！新的一天开始了！ ☀️\n一定要记得吃营养早餐哦！吃饱了才有力气迎接今天的挑战！\n所以你吃早餐了吗？'''
+            elif cul == "中午":
+                ask = f'''中午好！午间时光~ 🌞\n不要因为忙碌就忘记吃饭！好好吃饭才能保持下午的精力充沛。\n你吃午饭了吗？'''
+            elif cul == "晚上":
+                ask = f'''晚上好！今天一天幸苦啦~ 🌙\n晚餐吃过了吗？ 晚上要吃清淡一些，但营养也不能少哦！好好享受晚餐时光，犒劳一下辛苦一天的自己。'''
+            else:
+                ask = f'''这么晚了怎么还没睡呢？ 🌃\n要早点休息哦！长期熬夜对身体的影响很大：\n皮肤变差：会让皮肤暗沉、长痘痘\n记忆力下降：大脑得不到充分休息\n心脏负担：增加心血管疾病风险\n容易发胖：代谢会紊乱\n快放下手机，好好休息吧！ 😴\n晚安，好梦~明天见！'''
+            print(ask)
 
-                # 根据时间段执行不同操作
-                if cul == "早上":
-                    ask=f'''早上好！新的一天开始了！ ☀️
-                           一定要记得吃营养早餐哦！吃饱了才有力气迎接今天的挑战！
-                          所以你吃早餐了吗？'''
-                elif cul == "中午":
-                    ask=f'''中午好！午间时光~ 🌞
-                          不要因为忙碌就忘记吃饭！好好吃饭才能保持下午的精力充沛。
-                          你吃午饭了吗？'''
-                elif cul == "晚上":
-                    ask=f'''晚上好！今天一天幸苦啦~ 🌙
-                          晚餐吃过了吗？ 晚上要吃清淡一些，但营养也不能少哦！好好享受晚餐时光，犒劳一下辛苦一天的自己。'''
-                else:
-                    ask=f'''这么晚了怎么还没睡呢？ 🌃
-                          要早点休息哦！长期熬夜对身体的影响很大：
-                          皮肤变差：会让皮肤暗沉、长痘痘
-                          记忆力下降：大脑得不到充分休息
-                          心脏负担：增加心血管疾病风险
-                          容易发胖：代谢会紊乱
-                          快放下手机，好好休息吧！ 😴
-                          晚安，好梦~明天见！'''
-                print(ask)
+            while True:
                 user_input = input("\n您：").strip()
 
                 if not user_input:
@@ -494,12 +622,12 @@ class HealthAssistantBot:
                 response = self.chat(user_input)
                 print(f"\n助手：{response}")
 
-            except KeyboardInterrupt:
-                print("\n\n👋 下次见，记得坚持健康生活哦！")
-                break
-            except Exception as e:
-                print(f"\n❌ 错误: {str(e)}")
-                print("💡 请重新输入或输入'帮助'查看帮助")
+        except KeyboardInterrupt:
+            print("\n\n👋 下次见，记得坚持健康生活哦！")
+            return
+        except Exception as e:
+            print(f"\n❌ 错误: {str(e)}")
+            print("💡 请重新输入或输入'帮助'查看帮助")
 
     def show_menu(self):
         """显示功能菜单"""
