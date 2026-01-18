@@ -4,13 +4,13 @@
     "age": 18,
     "gender": "女",
     "height_cm": 155.5,
-    "current_weight_kg": 58,
-    "bmi": 24.0,
-    "status": "超重",
-    "suggestion": "建议控制饮食，增加运动",
+    "current_weight_kg": 122,
+    "bmi": 50.5,
+    "status": "肥胖",
+    "suggestion": "建议制定科学减肥计划",
     "goal": "健康减重（每月减2-4斤）",
     "target_weight_kg": 55.0,
-    "weight_to_lose": 3.0,
+    "weight_to_lose": 67.0,
     "diet_preferences": [
       "偏好甜食",
       "广东菜系"
@@ -23,7 +23,6 @@
       "健身操",
       "舞蹈"
     ],
-    "registration_date": "2025-12-22 23:01:57",
-    "last_update": "2026-01-02 22:58:19"
+    "registration_date": "2025-12-22 23:01:57"
   }
 }
