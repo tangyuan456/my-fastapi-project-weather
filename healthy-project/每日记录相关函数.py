@@ -58,11 +58,11 @@ class DailyHealthRecorder:
                 },
                 "drink_number": 0,  # 当前喝水杯数
                 "drink_plan": 8,  # 目标喝水杯数（假设8杯）
-                "早餐状态": "没吃",
-                "午餐状态": "没吃",
-                "晚餐状态": "没吃",
-                "宵夜状态": "没吃",
-                "运动状态": "没运动",
+                "早餐状态": ("没吃",""),
+                "午餐状态": ("没吃",""),
+                "晚餐状态": ("没吃",""),
+                "宵夜状态": ("没吃",""),
+                "运动状态": ("没运动",""),
                 "daily_history": [],  # 当日对话历史
                 "summary": "",  # 当日总结
                 "last_updated": datetime.datetime.now().isoformat()
@@ -141,38 +141,6 @@ class DailyHealthRecorder:
             return True
         except Exception as e:
             print(f"❌ 保存记录文件失败: {e}")
-            return False
-
-    def add_daily_history(self, role: str, content: str) -> bool:
-        """
-        添加当日对话历史
-
-        Args:
-            role: 角色 ('user' 或 'assistant')
-            content: 对话内容
-
-        Returns:
-            是否成功
-        """
-        try:
-            data = self.load_today_record()
-
-            note = {
-                "role": role,
-                "content": content[:500],  # 限制长度
-                "timestamp": datetime.datetime.now().isoformat()
-            }
-
-            data["daily_history"].append(note)
-
-            # 限制最多保存100条对话历史
-            if len(data["daily_history"]) > 100:
-                data["daily_history"] = data["daily_history"][-100:]
-
-            return self.save_today_record(data)
-
-        except Exception as e:
-            print(f"❌ 添加对话历史失败: {e}")
             return False
 
     def update_drink_number(self, drink_number: int, note: str = "") -> bool:
@@ -457,6 +425,7 @@ class DailyHealthRecorder:
        - 运动类型
        - 运动时长
        - 运动强度
+       - 学习视频
        - 注意事项
        - 鼓励话语，要温暖，让用户有动力
 
@@ -472,6 +441,7 @@ class DailyHealthRecorder:
       "movement": [
         "运动类型和时长",
         "运动强度说明",
+        "对应运动教程",
         "注意事项",
         "鼓励"
       ]
@@ -481,8 +451,9 @@ class DailyHealthRecorder:
     1. 基于前三天的记录进行个性化调整，
     2. 计划要具体、可执行、且强度要适中
     3. 考虑营养均衡、运动安全和用户偏好
-    4. 语气温和且专业
-    4. 用中文回复"""
+    4. 要给出该运动的对应文字教程，以便用户更好的学习，教程包括该运动的正确姿势教学、该运动技巧教学等
+    6. 语气温和且专业，尽量说的详细一点，防止用户听不懂
+    7. 用中文回复"""
 
             # 调用大模型
             response = openai_client.chat.completions.create(
@@ -573,3 +544,90 @@ class DailyHealthRecorder:
         except Exception as e:
             print(f"❌ 自动生成计划失败: {e}")
             return False
+
+    def add_daily_history(self, role: str, content: str) -> bool:
+        """
+        添加对话到每日历史记录
+
+        Args:
+            role: 角色 ('user' 或 'assistant')
+            content: 内容
+
+        Returns:
+            是否成功
+        """
+        try:
+            data = self.load_today_record()
+
+            # 确保 daily_history 存在
+            if "daily_history" not in data:
+                data["daily_history"] = []
+
+            # 添加新记录
+            history_entry = {
+                "role": role,
+                "content": content,
+                "timestamp": datetime.datetime.now().isoformat()
+            }
+            data["daily_history"].append(history_entry)
+
+            # 限制历史记录长度，避免文件过大
+            if len(data["daily_history"]) > 100:
+                data["daily_history"] = data["daily_history"][-50:]
+
+            # 更新最后修改时间
+            data["last_updated"] = datetime.datetime.now().isoformat()
+
+            # 保存文件
+            self.save_today_record(data)
+            return True
+
+        except Exception as e:
+            print(f"❌ 添加对话历史失败: {e}")
+            return False
+
+    def get_daily_history(self, limit: int = 10) -> List[Dict]:
+        """
+        获取最近的每日历史记录
+
+        Args:
+            limit: 返回的记录条数限制
+
+        Returns:
+            历史记录列表
+        """
+        try:
+            data = self.load_today_record()
+            history = data.get("daily_history", [])
+
+            # 返回最近的记录
+            return history[-limit:]
+
+        except Exception as e:
+            print(f"❌ 获取对话历史失败: {e}")
+            return []
+
+    def get_conversation_context(self) -> str:
+        """
+        获取对话上下文（用于大模型）
+
+        Returns:
+            格式化的对话上下文
+        """
+        history = self.get_daily_history(20)  # 获取最近20条记录
+
+        if not history:
+            return "今天是全新的一天，还没有对话记录。"
+
+        # 格式化历史记录
+        context_lines = []
+        for entry in history:
+            role = entry.get("role", "")
+            content = entry.get("content", "")
+
+            if role == "user":
+                context_lines.append(f"用户: {content}")
+            elif role == "assistant":
+                context_lines.append(f"助手: {content}")
+
+        return "\n".join(context_lines)

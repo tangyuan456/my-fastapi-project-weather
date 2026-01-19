@@ -15,7 +15,7 @@ from 初次录入 import (load_profiles, save_profiles, create_user_profile, del
                       search_user_profile, update_user_weight, calculate_bmi, USER_PROFILES)
 from 每日记录相关函数 import DailyHealthRecorder
 
-from 饮食相关函数 import (update_meal_status,get_daily_plan)
+from 饮食相关函数 import (update_meal_status,get_daily_plan,DietFunctions)
 
 # 禁用SSL警告
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -49,6 +49,8 @@ class HealthAssistantBot:
             base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
             http_client=http_client,  # 使用自定义客户端
         )
+
+        self.diet_functions = DietFunctions(client=self.client, api_key=qwen_api_key)
 
         # 加载用户数据
         self.users = load_profiles()
@@ -187,6 +189,28 @@ class HealthAssistantBot:
                         "required": ["view_type"],
                     },
                 },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "calculate_food_calories",
+                    "description": "【重要！用户描述吃了什么食物时必须调用】分析用户吃的食物热量和营养成分。当用户报告具体吃了什么时，调用此工具计算热量。如果描述模糊，会自动追问细节。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "user_input": {
+                                "type": "string",
+                                "description": "用户描述食物的完整输入文本",
+                            },
+                            "meal_type": {
+                                "type": "string",
+                                "description": "用餐类型。如果用户明确说了就传入明确值；如果不确定，传'auto'",
+                                "enum": ["早餐", "午餐", "晚餐", "宵夜", "auto"]
+                            }
+                        },
+                        "required": ["user_input"],
+                    },
+                },
             }
         ]
 
@@ -194,48 +218,131 @@ class HealthAssistantBot:
         self.history = [
             {
                 "role": "system",
-                "content": """你是一对一健康减肥助手AI。你的任务是专门为当前用户管理健康档案、跟踪减肥进度、提供健康建议。
+                "content": """#  一对一健康减肥助手AI - 完整操作指南
 
-        **重要指令：**
-        1. **多工具调用策略**：当用户的问题需要多个数据时，你应该一次性调用多个工具。例如：
-           - 用户问"我的健康状况怎么样？" → 同时调用 `search_my_profile` 和 `calculate_bmi`
-           - 用户提供新体重"今天体重65kg" → 调用 `update_user_weight`，然后自动调用 `calculate_bmi`
+## 你的身份
+你是用户专属的健康教练，负责：
+1. **健康档案管理** - 创建、查看、更新、删除
+2. **饮食跟踪分析** - 记录用餐、计算热量、分析营养
+3. **减肥进度监控** - 跟踪体重、计算BMI、评估进度
+4. **个性化建议** - 基于用户数据提供专属方案
+5. **日常计划指导** - 饮食计划、运动计划、饮水提醒
 
-        2. **工具调用顺序**：
-           a. 首先检查是否需要用户数据 → 调用 `search_my_profile`
-           b. 然后检查是否需要计算 → 调用 `calculate_bmi`
-           c. 最后生成个性化建议
+## 时间判断规则（北京时间）
+- **早餐时间**: 05:00-10:59
+- **午餐时间**: 11:00-15:59  
+- **晚餐时间**: 16:00-21:59
+- **宵夜时间**: 22:00-04:59
 
-        3. **执行流程**：
-           - 检查当前日期文件是否存在
-           - 获取用户问题
-           - 分析需要哪些数据
-           - 一次性调用所有必要的工具
-           - 整合所有工具结果
-           - 生成最终回复
+## 工具调用规则（按优先级排序）
 
-        4. **工具依赖关系**：
-           - `search_my_profile` 通常是第一步
-           - `calculate_bmi` 通常需要身高体重数据
-           - `update_user_weight` 后通常需要重新计算BMI
-           
-        **重要时间判断规则：**
-        1. **用餐时间判断**（基于北京时间）：
-           - 早餐时间：5:00-10:59（早上5点到10点59分）
-           - 午餐时间：11:00-15:59（上午11点到下午3点59分）
-           - 晚餐时间：16:00-21:59（下午4点到晚上9点59分）
-           - 宵夜时间：22:00-4:59（晚上10点到第二天凌晨4点59分）
-        
-        2. **当前时间判断**：你需要根据对话发生的实际时间来判断用餐类型。
-        
-        **工具调用规则：**
-        1. 当用户报告用餐情况时，必须调用 `update_meal_status` 工具
-        2. 根据当前时间自动判断meal_type：
-           - 如果当前时间在晚餐时间，meal_type传"晚餐"
-           - 如果当前时间在宵夜时间，meal_type传"auto"（让函数自动判断为"宵夜"）
+### 饮食相关场景
+**场景1：用户报告用餐**
+1. **第一步**：调用 `update_meal_status`
+   - 根据当前时间自动传入正确的 meal_type
+   - 示例：晚上19点 → meal_type="晚餐"
+   
+2. **第二步**：调用 `calculate_food_calories`
+   - 自动传入用户的完整描述
+   - meal_type与上一步保持一致
+   - **注意**：如果热量计算返回追问问题，直接显示给用户
 
-        请以亲密、专业的个人健康教练身份与用户交流，使用友好、鼓励的中文交流。
-        始终关注当前用户的个人健康数据，提供个性化建议。"""
+**场景2：用户询问食物热量**
+1. 直接调用 `calculate_food_calories`
+2. 分析结果并给出建议
+
+### 健康数据场景
+**场景3：用户需要健康建议**
+1. **第一步**：调用 `search_my_profile`（获取基础数据）
+2. **第二步**：如果需要BMI数据 → 调用 `calculate_bmi`
+3. **第三步**：整合数据提供建议
+
+**场景4：用户更新体重**
+1. 调用 `update_user_weight`（更新体重）
+2. 自动调用 `calculate_bmi`（重新计算BMI）
+
+### 日常计划场景
+**场景5：用户询问计划**
+1. 调用 `get_daily_plan`
+2. view_type选择规则：
+   - 问"现在该吃什么" → "current_meal"
+   - 问"下一餐" → "next_meal"
+   - 问"全天计划" → "all"
+   - 问"喝水" → "drink"
+   - 问"运动" → "exercise"
+
+### 账户管理场景
+**场景6：新用户注册**
+- 调用 `create_health_profile`
+
+**场景7：用户想重新开始**
+- 调用 `delete_my_profile`
+
+## 完整执行流程
+
+### 第1步：分析用户意图
+判断属于哪种场景，选择对应的工具调用策略。
+
+### 第2步：批量调用工具
+**重要**：一次性调用所有需要的工具，不要分开调用！
+- 示例：用户说"我今天吃了200克米饭"
+  - 同时调用：`update_meal_status` + `calculate_food_calories`
+- 示例：用户说"帮我看看健康状况"
+  - 同时调用：`search_my_profile` + `calculate_bmi`
+
+### 第3步：整合工具结果
+将所有工具返回的数据整合起来，形成完整信息。
+
+### 第4步：生成个性化回复
+**回复要求**：
+1. **语气**：温暖、专业、鼓励
+2. **内容**：具体、详细、可操作
+3. **个性化**：基于用户数据定制
+4. **鼓励性**：时刻给予正向反馈
+
+## 🌟 最佳实践示例
+
+### 示例1：晚餐报告
+用户："我吃了番茄炒蛋和一碗米饭"
+AI行动：
+1. 同时调用：
+   - `update_meal_status`(user_input="...", meal_type="晚餐")
+   - `calculate_food_calories`(user_input="...", meal_type="晚餐")
+2. 整合结果：
+   - 确认用餐状态
+   - 显示热量分析
+   - 给出营养建议
+
+### 示例2：体重更新
+用户："今天体重65kg"
+AI行动：
+1. 同时调用：
+   - `update_user_weight`(new_weight=65)
+   - `calculate_bmi`(weight=65, height=从档案获取)
+2. 整合结果：
+   - 显示新体重
+   - 显示新BMI
+   - 分析变化趋势
+
+### 示例3：健康咨询
+用户："我该怎么减肥？"
+AI行动：
+1. 同时调用：
+   - `search_my_profile`(action="view")
+   - `calculate_bmi`(weight=当前体重, height=身高)
+2. 整合结果：
+   - 基于BMI给出减肥建议
+   - 基于档案定制方案
+
+## 🎨 沟通风格要求
+
+1. **称呼**：使用用户昵称，如"小明"、"亲爱的"
+2. **表情**：适当使用表情符号增加亲和力
+3. **分段**：重要信息分点说明
+4. **鼓励**：每个回复都要有鼓励话语
+5. **具体**：建议要具体可行，不说空话
+
+记住：你是用户的专属教练，陪伴他/她完成整个减肥旅程！"""
             }
         ]
 
@@ -281,10 +388,6 @@ class HealthAssistantBot:
         """执行工具函数并返回结果"""
         print(f"🔧 执行工具: {function_name}")
         print(f"📋 参数: {arguments}")
-
-        if function_name == "update_meal_status":
-            print(f"🕐 当前时间：{datetime.datetime.now().strftime('%H:%M:%S')}")
-            print(f"🔍 检查方法是否存在：{hasattr(self, 'update_meal_status')}")
 
         try:
             if function_name == "create_health_profile":
@@ -380,10 +483,10 @@ class HealthAssistantBot:
                     print(f"🔍 传入参数：user_input='{user_input}', meal_type='{meal_type}'")
 
                     # 调用方法
-                    print(f"🔍 开始调用 self.update_meal_status()...")
+                    #print(f"🔍 开始调用 self.update_meal_status()...")
                     result = self.update_meal_status(user_input, meal_type)
-                    print(f"🔍 update_meal_status返回结果类型：{type(result)}")
-                    print(f"🔍 update_meal_status返回结果内容：{result}")
+                    #print(f"🔍 update_meal_status返回结果类型：{type(result)}")
+                    #print(f"🔍 update_meal_status返回结果内容：{result}")
 
                     # 格式化返回结果
                     if isinstance(result, dict):
@@ -404,9 +507,9 @@ class HealthAssistantBot:
                             user_nickname = self.get_current_user()
                             if user_nickname and self.users.get(user_nickname):
                                 user_profile = self.users[user_nickname]
-                                print(f"🔍 检查档案更新：早餐状态={user_profile.get('早餐状态', '没吃')}, "
-                                      f"午餐状态={user_profile.get('午餐状态', '没吃')}, "
-                                      f"晚餐状态={user_profile.get('晚餐状态', '没吃')}")
+                                print(f"🔍 检查档案更新：早餐状态={user_profile.get('早餐状态', ('没吃', ''))[0]}, "
+                                      f"午餐状态={user_profile.get('午餐状态', ('没吃', ''))[0]}, "
+                                      f"晚餐状态={user_profile.get('晚餐状态', ('没吃', ''))[0]}")
 
                         return response
                     else:
@@ -447,6 +550,91 @@ class HealthAssistantBot:
                 else:
                     return "❌ get_daily_plan工具不可用"
 
+
+            elif function_name == "calculate_food_calories":
+                # 获取参数
+                user_input = arguments.get("user_input", "")
+                meal_type = arguments.get("meal_type", "auto")
+                print(f"🔍 开始热量分析：'{user_input}' (用餐类型: {meal_type})")
+
+                try:
+                    # 获取最近的对话历史
+                    recent_history = self.recorder.get_daily_history(10)
+
+                    # 查找之前是否问过热量问题
+                    previous_food_input = None
+                    for i in range(len(recent_history) - 1, 0, -1):
+                        if recent_history[i].get("role") == "assistant" and "热量" in recent_history[i].get("content",""):
+
+                            # 往前找用户的回复
+                            for j in range(i - 1, -1, -1):
+                                if recent_history[j].get("role") == "user":
+                                    previous_food_input = recent_history[j].get("content")
+                                    break
+                            break
+                    print(f"🔍 找到之前的输入：{previous_food_input}")
+
+                    # 判断当前输入是否是补充信息
+                    is_followup = previous_food_input and any(
+                        word in user_input for word in ["包含", "大概", "大约", "左右", "酱料", "克", "g"])
+                    if is_followup:
+
+                        # 结合两次输入
+                        combined_input = f"{previous_food_input}。补充：{user_input}"
+                        print(f"🔍 合并输入：{combined_input}")
+                    else:
+                        combined_input = user_input
+
+                    # 使用饮食功能类分析热量
+                    result = self.diet_functions.get_calorie_analysis(combined_input)
+
+                    # 检查是否有错误
+                    if "error" in result:
+                        return f"❌ 热量分析失败: {result['error']}\n请重新描述食物。"
+
+                    # 处理需要追问的情况
+                    if result.get("needs_clarification", False) and not is_followup:
+                        response = result.get("message", "需要更多信息来准确计算热量：")
+                        questions = result.get("questions", [])
+                        for i, question in enumerate(questions, 1):
+                            response += f"\n{i}. {question}"
+                        response += f"\n\n{result.get('suggestion', '请回答上述问题，我会为您重新分析。')}"
+                        return response
+
+                    # 处理成功的情况
+                    elif result.get("success", False):
+
+                        # 构建详细回复
+                        response = f"""🍎 **食物热量分析完成！**
+            {result.get('explanation', '')}
+            
+            📝 **详细成分**："""
+                        for detail in result.get("details", []):
+                            response += f"\n• {detail['name']}：{detail['calories']}大卡"
+                            if detail.get('protein_g'):
+                                response += f" (蛋白质{detail['protein_g']}g)"
+
+                        # 添加综合建议
+                        total_cal = result.get('total_calories', 0)
+                        protein_g = result.get('protein_g', 0)
+
+                        # 根据总热量给出建议
+                        if total_cal > 0:
+                            daily_percent = round(total_cal / 2000 * 100)
+                            protein_suggestion = "充足" if protein_g > 20 else "稍低，建议补充"
+                            response += f"""
+            💡 **综合建议**：
+            • 这餐热量占每日推荐摄入的约{daily_percent}%（按2000大卡计算）
+            • 蛋白质摄入{protein_suggestion} 
+            • 记得保持均衡饮食，搭配适量运动！"""
+                        return response
+                    # 处理失败情况
+                    else:
+                        return result.get("message", "❌ 热量分析失败，请重新描述食物。")
+                except Exception as e:
+                    print(f"❌ 热量计算异常: {e}")
+                    return f"❌ 热量分析时出现错误: {str(e)}\n请重新描述食物。"
+
             else:
                 return f"未知的工具函数: {function_name}"
 
@@ -459,7 +647,10 @@ class HealthAssistantBot:
         print(f"\n{'=' * 50}")
         print(f"用户: {user_input}")
 
-        # 添加用户消息
+        # 1. 保存用户对话到每日记录
+        self.recorder.add_daily_history("user", user_input)
+
+        # 2. 添加到主历史记录
         self.history.append({"role": "user", "content": user_input})
 
         if user_input == "查看聊天历史":
@@ -467,7 +658,7 @@ class HealthAssistantBot:
             return "这是您的聊天历史..."
 
         # 使用流式处理，支持多轮工具调用
-        max_iterations = 3  # 防止无限循环
+        max_iterations = 3
         iteration_count = 0
 
         while iteration_count < max_iterations:
@@ -488,7 +679,10 @@ class HealthAssistantBot:
             # 如果没有工具调用，直接返回
             if not ai_message.tool_calls:
                 final_reply = ai_message.content
-                self.history.append({"role": "assistant", "content": final_reply})
+
+                # 保存助手回复到每日记录
+                self.recorder.add_daily_history("assistant", final_reply)
+
                 print(f"AI: {final_reply[:100]}...")
                 print(f"{'=' * 50}")
                 return final_reply
@@ -521,20 +715,25 @@ class HealthAssistantBot:
                 })
 
             # 如果是最后一轮，让AI整合结果
-            if iteration_count >= max_iterations :
+            if iteration_count >= max_iterations:
                 print("🤖 AI整合所有工具结果生成回复...")
                 final_response = self.client.chat.completions.create(
                     model="qwen-turbo",
                     messages=self.history,
                 )
                 final_reply = final_response.choices[0].message.content
-                self.history.append({"role": "assistant", "content": final_reply})
+
+                # 保存助手回复到每日记录
+                self.recorder.add_daily_history("assistant", final_reply)
+
                 print(f"AI: {final_reply[:100]}...")
                 print(f"{'=' * 50}")
                 return final_reply
 
-        # 达到最大轮次，返回默认回复
-        return "我已经为您处理了相关数据，还有什么可以帮助您的吗？"
+        # 达到最大轮次
+        default_reply = "我已经为您处理了相关数据，还有什么可以帮助您的吗？"
+        self.recorder.add_daily_history("assistant", default_reply)
+        return default_reply
 
     def interactive_chat(self):
         """交互式聊天"""
@@ -605,26 +804,32 @@ class HealthAssistantBot:
 
                 # 获取当前用餐状态
                 status_field = f"{current_meal}状态"
-                current_meal_status = today_data.get(status_field, "没吃")
+                current_meal_tuple = today_data.get(status_field, ("没吃", ""))
+                current_meal_status = current_meal_tuple[0]
 
                 print(f"{greeting}")
+                self.history.append({"role": "assistant", "content": greeting})
 
                 # 根据状态决定是否询问
                 if current_meal_status == "吃了":
                     # 如果已经吃了，显示确认信息
                     if index != 3:
                         print(f"✅ 很好！看到你已经吃过{current_meal}了。可以告诉我你吃了什么吗？我将为你进行详细的营养分析哦！")
+                        self.history.append({"role": "assistant", "content": f"✅ 很好！看到你已经吃过{current_meal}了。可以告诉我你吃了什么吗？我将为你进行详细的营养分析哦！"})
                     else:
                         print(f"{question}")
+                        self.history.append({"role": "assistant", "content": question})
 
                 else:
                     # 如果还没吃，询问用户
                     print(f"{question}")
+                    self.history.append({"role": "assistant", "content": question})
 
                     # 显示今日计划
                     if "daily_plan" in today_data:
                         food_plan = today_data["daily_plan"].get("food", [])
                         print(f"\n📋 今日{current_meal}计划：{food_plan[index]}")
+                        self.history.append({"role": "assistant", "content": f"\n📋 今日{current_meal}计划：{food_plan[index]}"})
 
 
             except Exception as e:
