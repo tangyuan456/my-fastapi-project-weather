@@ -1,6 +1,6 @@
 import datetime
 from idlelib import history
-
+import os
 import httpx
 import ssl
 from openai import OpenAI
@@ -17,6 +17,10 @@ from 每日记录相关函数 import DailyHealthRecorder
 
 from 饮食相关函数 import (update_meal_status,get_daily_plan,DietFunctions)
 
+from 历史总结相关函数 import HistorySummaryManager
+
+from 运动相关函数 import ExerciseFunctions
+
 # 禁用SSL警告
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -28,9 +32,15 @@ class HealthAssistantBot:
         self.qwen_api_key = qwen_api_key
         self.current_user = None  # 当前登录的用户
         self.recorder = DailyHealthRecorder()
+        self.users = load_profiles()
         self.update_meal_status = update_meal_status.__get__(self, HealthAssistantBot)
         self.get_daily_plan = get_daily_plan.__get__(self, HealthAssistantBot)
         self.save_profiles_func = save_profiles
+        self.history_summary = HistorySummaryManager(self.recorder)
+        self.exercise_functions = ExerciseFunctions(
+            self.recorder,
+            self.users.get(self.get_current_user()) if self.get_current_user() else None
+        )
 
         # 创建不验证SSL的HTTP客户端
         ssl_context = ssl.create_default_context()
@@ -211,7 +221,58 @@ class HealthAssistantBot:
                         "required": ["user_input"],
                     },
                 },
-            }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "update_exercise_status",
+                    "description": "【重要！用户报告运动情况时必须调用】当用户报告进行了运动时，自动识别运动类型并更新运动状态。调用此工具可以记录用户的运动情况。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "user_input": {
+                                "type": "string",
+                                "description": "用户描述运动情况的完整输入文本",
+                            },
+                            "exercise_type": {
+                                "type": "string",
+                                "description": "运动类型。如果用户明确说了就传入明确值；如果不确定，让AI自行判断并传入'auto'",
+                                "enum": ["跑步", "步行", "骑行", "游泳", "跳绳", "瑜伽", "健身", "羽毛球", "篮球",
+                                         "足球", "auto"]
+                            }
+                        },
+                        "required": ["user_input"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "calculate_exercise_calories",
+                    "description": "【重要！用户描述运动后必须调用】分析用户运动的卡路里消耗。当用户报告具体运动情况时，调用此工具计算消耗的热量。如果描述模糊，会自动追问细节。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "user_input": {
+                                "type": "string",
+                                "description": "用户描述运动的完整输入文本",
+                            },
+                            "exercise_type": {
+                                "type": "string",
+                                "description": "运动类型。如果用户明确说了就传入明确值；如果不确定，传'auto'",
+                                "enum": ["跑步", "步行", "骑行", "游泳", "跳绳", "瑜伽", "健身", "羽毛球", "篮球",
+                                         "足球", "auto"]
+                            },
+                            "record_index": {
+                                "type": "integer",
+                                "description": "要计算的记录索引，0表示最新记录，1表示上一次，以此类推。默认0",
+                                "minimum": 0
+                            }
+                        },
+                        "required": ["user_input"],
+                    },
+                },
+            },
         ]
 
         # 修改系统提示
@@ -603,12 +664,11 @@ AI行动：
 
                     # 处理成功的情况
                     elif result.get("success", False):
-
                         # 构建详细回复
                         response = f"""🍎 **食物热量分析完成！**
-            {result.get('explanation', '')}
-            
-            📝 **详细成分**："""
+                            {result.get('explanation', '')}
+
+                            📝 **详细成分**："""
                         for detail in result.get("details", []):
                             response += f"\n• {detail['name']}：{detail['calories']}大卡"
                             if detail.get('protein_g'):
@@ -623,10 +683,63 @@ AI行动：
                             daily_percent = round(total_cal / 2000 * 100)
                             protein_suggestion = "充足" if protein_g > 20 else "稍低，建议补充"
                             response += f"""
-            💡 **综合建议**：
-            • 这餐热量占每日推荐摄入的约{daily_percent}%（按2000大卡计算）
-            • 蛋白质摄入{protein_suggestion} 
-            • 记得保持均衡饮食，搭配适量运动！"""
+                                💡 **综合建议**：
+                                • 这餐热量占每日推荐摄入的约{daily_percent}%（按2000大卡计算）
+                                • 蛋白质摄入{protein_suggestion} 
+                                • 记得保持均衡饮食，搭配适量运动！"""
+
+                        # 自动检测并保存食物详情
+                        # 1. 首先确定是哪个餐次（从上下文或自动判断）
+                        detected_meal = meal_type
+
+                        # 如果meal_type是auto，尝试从user_input判断
+                        if meal_type == "auto":
+                            # 简单判断逻辑
+                            if any(word in user_input for word in ["早餐", "早饭", "早点"]):
+                                detected_meal = "早餐"
+                            elif any(word in user_input for word in ["午餐", "午饭", "中午"]):
+                                detected_meal = "午餐"
+                            elif any(word in user_input for word in ["晚餐", "晚饭", "晚上"]):
+                                detected_meal = "晚餐"
+                            else:
+                                # 根据时间判断
+                                current_hour = datetime.datetime.now().hour
+                                if 5 <= current_hour < 11:
+                                    detected_meal = "早餐"
+                                elif 11 <= current_hour < 16:
+                                    detected_meal = "午餐"
+                                elif 16 <= current_hour < 22:
+                                    detected_meal = "晚餐"
+                                else:
+                                    detected_meal = "宵夜"
+
+                        # 2. 准备食物信息
+                        food_info = {
+                            "description": user_input,
+                            "total_calories": total_cal,
+                            "protein_g": protein_g,
+                            "carbs_g": result.get('carbs_g', 0),
+                            "fat_g": result.get('fat_g', 0),
+                            "details": result.get('details', [])
+                        }
+
+                        # 3. 更新餐次状态并保存食物详情
+                        if detected_meal in ["早餐", "午餐", "晚餐", "宵夜"]:
+                            try:
+                                # 使用update_meal_status来更新状态并保存食物信息
+                                update_result = self.update_meal_status(
+                                    user_input=user_input,
+                                    meal_type=detected_meal,
+                                    food_info=food_info
+                                )
+
+                                if update_result.get("success", False):
+                                    print(f"✅ 已保存{detected_meal}的食物详情")
+                                else:
+                                    print(f"⚠️ 保存食物详情失败：{update_result.get('message', '未知错误')}")
+                            except Exception as e:
+                                print(f"⚠️ 调用update_meal_status失败: {e}")
+
                         return response
                     # 处理失败情况
                     else:
@@ -634,6 +747,80 @@ AI行动：
                 except Exception as e:
                     print(f"❌ 热量计算异常: {e}")
                     return f"❌ 热量分析时出现错误: {str(e)}\n请重新描述食物。"
+
+            elif function_name == "update_exercise_status":
+                # 更新运动状态
+                user_input = arguments.get("user_input", "")
+                exercise_type = arguments.get("exercise_type", "auto")
+
+                result = self.exercise_functions.update_exercise_status(user_input, exercise_type)
+
+                # 格式化返回结果
+                if isinstance(result, dict):
+                    if result.get("success"):
+                        response = result.get("message", "✅ 运动状态已更新")
+
+                        # 如果需要计算卡路里，提示下一步
+                        if result.get("needs_calorie_calculation"):
+                            response += f"\n\n🔢 检测到您进行了{result.get('exercise_type', '运动')}，正在为您计算消耗的卡路里..."
+
+                        return response
+                    else:
+                        # 处理追问情况
+                        if result.get("needs_clarification"):
+                            response = result.get("message", "需要更多信息来记录运动：")
+                            questions = result.get("questions", [])
+                            for i, question in enumerate(questions, 1):
+                                response += f"\n{i}. {question}"
+                            response += f"\n\n{result.get('suggestion', '请回答上述问题，我会为您记录这次运动。')}"
+                            return response
+                        else:
+                            return result.get("message", "❌ 更新运动状态失败")
+                else:
+                    return str(result)
+
+            elif function_name == "calculate_exercise_calories":
+                # 计算运动卡路里
+                user_input = arguments.get("user_input", "")
+                exercise_type = arguments.get("exercise_type", "auto")
+                record_index = arguments.get("record_index", 0)
+
+                result = self.exercise_functions.calculate_exercise_calories(
+                    user_input, exercise_type, record_index
+                )
+
+                # 格式化返回结果
+                if isinstance(result, dict):
+                    if result.get("success"):
+                        total_cal = result.get("total_calories", 0)
+                        exercise_type = result.get("exercise_type", "运动")
+                        explanation = result.get("explanation", "")
+
+                        response = f"""🔥 **运动卡路里计算完成！**
+
+            🏃 **运动类型**：{exercise_type}
+            💪 **消耗热量**：**{total_cal}大卡**
+            📊 **计算方法**：{result.get('calculation_method', '估算')}
+            📈 **计算依据**：{explanation}"""
+
+                        # 添加今日总计
+                        today_total = result.get("today_total", 0)
+                        if today_total > 0:
+                            response += f"\n\n📅 **今日运动总计**：{today_total}大卡"
+                        return response
+                    else:
+                        # 处理追问情况
+                        if result.get("needs_clarification"):
+                            response = result.get("message", "需要更多信息来计算卡路里：")
+                            questions = result.get("questions", [])
+                            for i, question in enumerate(questions, 1):
+                                response += f"\n{i}. {question}"
+                            response += f"\n\n{result.get('suggestion', '请回答上述问题，我会为您计算卡路里。')}"
+                            return response
+                        else:
+                            return result.get("message", "❌ 计算卡路里失败")
+                else:
+                    return str(result)
 
             else:
                 return f"未知的工具函数: {function_name}"
@@ -765,6 +952,46 @@ AI行动：
                 print(f"✅ 成功创建您的个人健康档案！欢迎 {self.current_user}，从现在开始我会陪伴您的健康减肥之旅！")
             else:
                 print("❌ 创建健康档案失败或您取消了操作。")
+
+        today = datetime.datetime.now().strftime("%Y-%m-%d")
+
+        # 构建文件路径（假设文件在当前目录下）
+        file_path = f"{today}.json"
+
+        # 检查文件是否存在并输出
+        if not os.path.exists(file_path):
+            # 处理最近未总结的记录
+            date_str, summary, is_new = self.history_summary.process_latest_unsummarized_record(
+                ai_client=self.client,  # 传入AI客户端用于生成智能总结
+                max_days_back=30  # 最多回溯30天
+            )
+
+            if date_str and summary:
+                print("\n" + "=" * 60)
+                if is_new:
+                    print(f"📊 {date_str} 表现总结（新生成）")
+                else:
+                    print(f"📊 {date_str} 表现回顾")
+                print("=" * 60)
+                print(summary)
+                print("=" * 60 + "\n")
+
+                # 可选：清理历史记录以节省空间（7天前的记录）
+                if date_str != datetime.datetime.now().strftime("%Y-%m-%d"):
+                    try:
+                        check_date = datetime.datetime.strptime(date_str, "%Y-%m-%d")
+                        days_ago = (datetime.datetime.now() - check_date).days
+
+                        if days_ago >= 7:  # 7天前的记录可以清理
+                            print(f"🗑️  清理{date_str}的历史记录以节省空间...")
+                            self.history_summary.clear_history_for_date(
+                                date_str=date_str,
+                                keep_summary=True  # 保留总结，只清理详细对话记录
+                            )
+                    except Exception as e:
+                        print(f"⚠️ 日期处理失败: {e}")
+            else:
+                print("📭 没有需要总结的历史记录")
 
         self._init_daily_system()
 

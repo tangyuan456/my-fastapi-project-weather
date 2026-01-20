@@ -631,3 +631,69 @@ class DailyHealthRecorder:
                 context_lines.append(f"助手: {content}")
 
         return "\n".join(context_lines)
+
+    def update_meal_with_details(self, meal: str, status: str,
+                                 food_info: Dict[str, Any] = None) -> bool:
+        """
+        更新餐次状态并包含食物详情
+
+        Args:
+            meal: 餐次名称（早餐/午餐/晚餐/宵夜）
+            status: 状态（吃了/没吃）
+            food_info: 食物详情信息（可选）
+
+        Returns:
+            是否成功
+        """
+        try:
+            data = self.load_today_record()
+            status_field = f"{meal}状态"
+
+            # 准备食物信息字典
+            food_details = {}
+            if food_info:
+                food_details = {
+                    "description": food_info.get("description", ""),
+                    "total_calories": food_info.get("total_calories", 0),
+                    "protein_g": food_info.get("protein_g", 0),
+                    "carbs_g": food_info.get("carbs_g", 0),
+                    "fat_g": food_info.get("fat_g", 0),
+                    "analysis_time": datetime.datetime.now().isoformat(),
+                    "details": food_info.get("details", [])
+                }
+
+            # 更新状态（状态文本 + 食物详情）
+            data[status_field] = (status, food_details)
+
+            return self.save_today_record(data)
+
+        except Exception as e:
+            print(f"❌ 更新餐次详情失败: {e}")
+            return False
+
+    def get_meal_food_info(self, meal: str) -> Dict[str, Any]:
+        """
+        获取餐次的食物信息
+
+        Args:
+            meal: 餐次名称
+
+        Returns:
+            食物信息字典
+        """
+        try:
+            data = self.load_today_record()
+            status_field = f"{meal}状态"
+
+            current_status = data.get(status_field, ("没吃", {}))
+
+            if isinstance(current_status, tuple) and len(current_status) > 1:
+                food_info = current_status[1]
+                if isinstance(food_info, dict):
+                    return food_info
+
+            return {}
+
+        except Exception as e:
+            print(f"❌ 获取餐次食物信息失败: {e}")
+            return {}

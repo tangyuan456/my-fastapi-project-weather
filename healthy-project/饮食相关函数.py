@@ -512,7 +512,7 @@ class DietFunctions:
 
         return explanation
 
-def update_meal_status(self, user_input: str, meal_type: str = "auto") -> dict:
+def update_meal_status(self, user_input: str, meal_type: str = "auto", food_info: Dict[str, Any] = None) -> dict:
     """
     更新用户的用餐状态并给出相应建议
 
@@ -560,9 +560,9 @@ def update_meal_status(self, user_input: str, meal_type: str = "auto") -> dict:
                     detected_meal = "宵夜"
 
             #    print(f"🔍 [update_meal_status内部] 自动判断结果：{detected_meal}")
-            else:
-            #    print(f"🔍 [update_meal_status内部] 使用指定的meal_type：{meal_type}")
-                detected_meal = meal_type
+        else:
+        #    print(f"🔍 [update_meal_status内部] 使用指定的meal_type：{meal_type}")
+            detected_meal = meal_type
 
             # 检查detected_meal是否有效
             if not detected_meal:
@@ -611,7 +611,18 @@ def update_meal_status(self, user_input: str, meal_type: str = "auto") -> dict:
             print(f"🔍 [update_meal_status内部] 更新字段：{status_field}，从'{old_status}'改为'吃了'")
 
             # 更新为新的元组
-            today_data[status_field] = ("吃了", "自动记录")
+            food_details = {}
+            if food_info:
+                food_details = {
+                    "description": user_input,  # 使用用户输入作为描述
+                    "total_calories": food_info.get("total_calories", 0),
+                    "protein_g": food_info.get("protein_g", 0),
+                    "carbs_g": food_info.get("carbs_g", 0),
+                    "fat_g": food_info.get("fat_g", 0),
+                    "analysis_time": current_time.isoformat()
+                }
+
+            today_data[status_field] = ("吃了", food_details)
 
             today_data["last_updated"] = current_time.isoformat()
 
