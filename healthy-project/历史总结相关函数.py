@@ -317,7 +317,7 @@ class HistorySummaryManager:
 {chr(10).join(conversation_samples) if conversation_samples else "当天没有对话记录"}
 
 【总结要求】
-1. 开头亲切问候，提及日期
+1. 开头亲切问候，提及日期（请注意这是对昨天的总结，所有一切都是昨天发生的事）
 2. 对重要信息进行总结：
     -早中晚及宵夜的食用，计算总摄入的热量
     -运动情况，计算总燃烧的卡路里

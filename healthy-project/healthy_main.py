@@ -21,6 +21,8 @@ from 历史总结相关函数 import HistorySummaryManager
 
 from 运动相关函数 import ExerciseFunctions
 
+from 负面因子 import NegativeFactorManager
+
 # 禁用SSL警告
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -41,6 +43,7 @@ class HealthAssistantBot:
             self.recorder,
             self.users.get(self.get_current_user()) if self.get_current_user() else None
         )
+        self.negative_factor_manager = NegativeFactorManager(self.recorder)
 
         # 创建不验证SSL的HTTP客户端
         ssl_context = ssl.create_default_context()
@@ -111,7 +114,7 @@ class HealthAssistantBot:
                 "type": "function",
                 "function": {
                     "name": "update_user_weight",
-                    "description": "更新当前用户的体重信息。调用此工具后会触发重新计算BMI。",
+                    "description": "当用户的输入包含现在的体重信息时必须调用！用于更新当前用户的体重信息。调用此工具后会触发重新计算BMI。",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -273,6 +276,44 @@ class HealthAssistantBot:
                     },
                 },
             },
+            {
+                "type": "function",
+                "function": {
+                    "name": "detect_and_record_negative_factors",
+                    "description": "【重要！用户描述不适情况时必须调用】自动检测用户输入中的负面因子（如受伤、生病、情绪问题等），评估严重程度并记录。会判断是否适合继续运动。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "user_input": {
+                                "type": "string",
+                                "description": "用户描述不适情况的完整输入文本",
+                            }
+                        },
+                        "required": ["user_input"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "mark_negative_factor_recovered",
+                    "description": "【重要！用户报告康复时必须调用】当用户报告负面因子已康复（如'我好了'、'不疼了'）时，调用此工具标记对应的负面因子为已康复状态，停止自动复制。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "user_input": {
+                                "type": "string",
+                                "description": "用户报告康复的完整输入文本",
+                            },
+                            "factor_id": {
+                                "type": "integer",
+                                "description": "要标记的因子ID（可选，如果不指定，系统会尝试自动选择）",
+                            }
+                        },
+                        "required": ["user_input"],
+                    },
+                },
+            }
         ]
 
         # 修改系统提示
@@ -319,8 +360,19 @@ class HealthAssistantBot:
 3. **第三步**：整合数据提供建议
 
 **场景4：用户更新体重**
+要求：一旦用户输入信息包含体重的改变，立即调用
 1. 调用 `update_user_weight`（更新体重）
 2. 自动调用 `calculate_bmi`（重新计算BMI）
+
+### 负面因子相关场景
+**场景：用户描述不适**
+1. **必须调用** `detect_and_record_negative_factors`
+   - 当用户提到受伤、生病、情绪低落等情况时
+   - 工具会自动评估严重程度并给出运动建议
+
+**场景：用户询问能否运动**
+1. 先调用 `detect_and_record_negative_factors`（如果有不适）
+2. 然后基于工具返回的建议回答
 
 ### 日常计划场景
 **场景5：用户询问计划**
@@ -821,6 +873,56 @@ AI行动：
                             return result.get("message", "❌ 计算卡路里失败")
                 else:
                     return str(result)
+
+            elif function_name == "detect_and_record_negative_factors":
+                # 检测并记录负面因子
+                user_input = arguments.get("user_input", "")
+
+                result = self.negative_factor_manager.analyze_and_record(user_input)
+
+                if result.get("success"):
+                    if result.get("has_negative_factor"):
+                        response = f"{result.get('message', '检测到负面因子')}"
+                        if "suggestion" in result:
+                            response += f"\n\n{result['suggestion']}"
+
+                        # 如果是新的因子，添加特别提醒
+                        if result.get("is_new", False):
+                            factor_info = result.get("factor_info", {})
+                            severity = factor_info.get("severity", "轻")
+                            if severity == "重":
+                                response += f"\n\n⚠️ **重要提醒**：检测到重度{result.get('type', '问题')}，请务必注意休息，如有需要请及时就医！"
+
+                        return response
+                    else:
+                        return result.get("message", "未检测到负面因子，保持良好的状态！")
+                else:
+                    return result.get("message", "负面因子分析失败")
+
+            elif function_name == "mark_negative_factor_recovered":
+                # 标记负面因子为已康复
+                user_input = arguments.get("user_input", "")
+                factor_id = arguments.get("factor_id")
+
+                result = self.negative_factor_manager.mark_as_recovered(user_input, factor_id)
+
+                if result.get("success"):
+                    response = f"{result.get('message', '标记成功')}"
+                    if "summary" in result:
+                        response += f"\n\n📊 当前状态：\n{result['summary']}"
+                    if "suggestion" in result:
+                        response += f"\n\n{result['suggestion']}"
+                    return response
+                elif result.get("needs_clarification"):
+                    # 需要用户澄清选择哪个因子
+                    response = result.get("message", "需要更多信息：")
+                    questions = result.get("questions", [])
+                    for question in questions:
+                        response += f"\n{question}"
+                    response += f"\n\n{result.get('suggestion', '请回复对应编号')}"
+                    return response
+                else:
+                    return result.get("message", "标记康复失败")
 
             else:
                 return f"未知的工具函数: {function_name}"
