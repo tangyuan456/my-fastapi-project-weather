@@ -553,6 +553,7 @@ class DailyHealthRecorder:
                     if "food" in today_plan and "movement" in today_plan:
                         print("✅ AI已生成详细健康计划")
                         self._validate_plan_against_factors(today_plan, active_factors)
+                        self.add_daily_history("user", today_plan)
                         return today_plan
                     else:
                         print("⚠️ AI返回的计划格式不完整，使用默认计划")
@@ -1344,100 +1345,215 @@ class DailyHealthRecorder:
         else:
             print("✅ 计划验证：已充分考虑所有负面因子")
 
-        def _auto_reduce_severity(self, factor: Dict[str, Any]) -> None:
-            """
-            根据持续时间自动减轻负面因子的严重程度
+    def _auto_reduce_severity(self, factor: Dict[str, Any]) -> None:
+        """
+        根据持续时间自动减轻负面因子的严重程度
 
-            规则：
-            - 轻度问题：3天后自动减轻或建议康复
-            - 中度问题：5天后自动减轻
-            - 重度问题：7天后自动减轻
-            - 超过14天：自动标记为"恢复中"
-            - 超过30天：自动康复
-            """
-            duration = factor.get("duration_days", 1)
-            current_severity = factor.get("severity", "轻")
-            factor_type = factor.get("type", "")
+        规则：
+        - 轻度问题：3天后自动减轻或建议康复
+        - 中度问题：5天后自动减轻
+        - 重度问题：7天后自动减轻
+        - 超过14天：自动标记为"恢复中"
+        - 超过30天：自动康复
+        """
+        duration = factor.get("duration_days", 1)
+        current_severity = factor.get("severity", "轻")
+        factor_type = factor.get("type", "")
 
-            # 不同类型的问题有不同的恢复时间
-            recovery_timelines = {
-                "受伤": {"轻": 3, "中": 7, "重": 14},
-                "生病": {"轻": 3, "中": 5, "重": 10},
-                "情绪": {"轻": 2, "中": 4, "重": 7},
-                "疲劳": {"轻": 2, "中": 3, "重": 5},
-                "其他": {"轻": 3, "中": 5, "重": 7}
-            }
+        # 不同类型的问题有不同的恢复时间
+        recovery_timelines = {
+            "受伤": {"轻": 3, "中": 7, "重": 14},
+            "生病": {"轻": 3, "中": 5, "重": 10},
+            "情绪": {"轻": 2, "中": 4, "重": 7},
+            "疲劳": {"轻": 2, "中": 3, "重": 5},
+            "其他": {"轻": 3, "中": 5, "重": 7}
+        }
 
-            # 获取该类型问题的恢复时间
-            timeline = recovery_timelines.get(factor_type, recovery_timelines["其他"])
-            recovery_days = timeline.get(current_severity, 3)
+        # 获取该类型问题的恢复时间
+        timeline = recovery_timelines.get(factor_type, recovery_timelines["其他"])
+        recovery_days = timeline.get(current_severity, 3)
 
-            # 记录原始值，用于大模型参考
-            if "original_severity" not in factor:
-                factor["original_severity"] = current_severity
-            if "original_start_date" not in factor:
-                factor["original_start_date"] = factor.get("start_date", "")
+        # 记录原始值，用于大模型参考
+        if "original_severity" not in factor:
+            factor["original_severity"] = current_severity
+        if "original_start_date" not in factor:
+            factor["original_start_date"] = factor.get("start_date", "")
 
-            # 判断是否需要调整严重程度
-            if current_severity == "重":
-                if duration >= recovery_days:
-                    # 重度问题达到恢复时间后降为中度
-                    factor["severity"] = "中"
-                    factor["severity_level"] = 2
-                    factor["auto_reduced"] = True
-                    factor["reduction_reason"] = f"持续{duration}天后自动减轻"
-                    factor["reduction_date"] = datetime.datetime.now().strftime("%Y-%m-%d")
+        # 判断是否需要调整严重程度
+        if current_severity == "重":
+            if duration >= recovery_days:
+                # 重度问题达到恢复时间后降为中度
+                factor["severity"] = "中"
+                factor["severity_level"] = 2
+                factor["auto_reduced"] = True
+                factor["reduction_reason"] = f"持续{duration}天后自动减轻"
+                factor["reduction_date"] = datetime.datetime.now().strftime("%Y-%m-%d")
 
-                    # 如果是受伤，调整运动建议
-                    if factor_type == "受伤":
-                        factor["should_exercise"] = False  # 中度受伤仍不建议运动
-                elif duration >= recovery_days * 2:
-                    # 两倍恢复时间后降为轻度
-                    factor["severity"] = "轻"
-                    factor["severity_level"] = 1
-                    factor["auto_reduced"] = True
-                    factor["reduction_reason"] = f"持续{duration}天后显著改善"
+                # 如果是受伤，调整运动建议
+                if factor_type == "受伤":
+                    factor["should_exercise"] = False  # 中度受伤仍不建议运动
+            elif duration >= recovery_days * 2:
+                # 两倍恢复时间后降为轻度
+                factor["severity"] = "轻"
+                factor["severity_level"] = 1
+                factor["auto_reduced"] = True
+                factor["reduction_reason"] = f"持续{duration}天后显著改善"
 
-                    # 调整运动建议
-                    factor["should_exercise"] = True  # 轻度可以适当运动
+                # 调整运动建议
+                factor["should_exercise"] = True  # 轻度可以适当运动
 
-            elif current_severity == "中":
-                if duration >= recovery_days:
-                    # 中度问题达到恢复时间后降为轻度
-                    factor["severity"] = "轻"
-                    factor["severity_level"] = 1
-                    factor["auto_reduced"] = True
-                    factor["reduction_reason"] = f"持续{duration}天后自动减轻"
+        elif current_severity == "中":
+            if duration >= recovery_days:
+                # 中度问题达到恢复时间后降为轻度
+                factor["severity"] = "轻"
+                factor["severity_level"] = 1
+                factor["auto_reduced"] = True
+                factor["reduction_reason"] = f"持续{duration}天后自动减轻"
 
-                    # 调整运动建议
-                    factor["should_exercise"] = True  # 轻度可以适当运动
-                elif duration >= recovery_days * 1.5:
-                    # 1.5倍恢复时间后建议确认康复
-                    factor["status"] = "recovering"
-                    factor["recovery_suggested"] = True
-                    factor["recovery_reason"] = f"已持续{duration}天，建议确认是否已完全康复"
+                # 调整运动建议
+                factor["should_exercise"] = True  # 轻度可以适当运动
+            elif duration >= recovery_days * 1.5:
+                # 1.5倍恢复时间后建议确认康复
+                factor["status"] = "recovering"
+                factor["recovery_suggested"] = True
+                factor["recovery_reason"] = f"已持续{duration}天，建议确认是否已完全康复"
 
-            elif current_severity == "轻":
-                if duration >= recovery_days:
-                    # 轻度问题达到恢复时间后建议确认康复
-                    factor["status"] = "recovering"
-                    factor["recovery_suggested"] = True
-                    factor["recovery_reason"] = f"已持续{duration}天，建议确认是否已完全康复"
-                elif duration >= recovery_days * 2:
-                    # 两倍恢复时间后自动康复
-                    factor["status"] = "recovered"
-                    factor["recovery_date"] = datetime.datetime.now().strftime("%Y-%m-%d")
-                    factor["recovery_notes"] = f"持续{duration}天后系统自动标记康复"
-                    factor["auto_recovered"] = True
-
-            # 超过30天的活跃负面因子，强制标记为康复
-            if duration >= 30 and factor.get("status") == "active":
+        elif current_severity == "轻":
+            if duration >= recovery_days:
+                # 轻度问题达到恢复时间后建议确认康复
+                factor["status"] = "recovering"
+                factor["recovery_suggested"] = True
+                factor["recovery_reason"] = f"已持续{duration}天，建议确认是否已完全康复"
+            elif duration >= recovery_days * 2:
+                # 两倍恢复时间后自动康复
                 factor["status"] = "recovered"
                 factor["recovery_date"] = datetime.datetime.now().strftime("%Y-%m-%d")
-                factor["recovery_notes"] = f"持续{duration}天，系统自动标记康复"
+                factor["recovery_notes"] = f"持续{duration}天后系统自动标记康复"
                 factor["auto_recovered"] = True
 
-            # 记录恢复进度百分比（用于大模型参考）
-            recovery_percent = min(100, (duration / recovery_days) * 100)
-            factor["recovery_progress"] = round(recovery_percent, 1)
-            factor["estimated_recovery_days"] = max(0, recovery_days - duration)
+        # 超过30天的活跃负面因子，强制标记为康复
+        if duration >= 30 and factor.get("status") == "active":
+            factor["status"] = "recovered"
+            factor["recovery_date"] = datetime.datetime.now().strftime("%Y-%m-%d")
+            factor["recovery_notes"] = f"持续{duration}天，系统自动标记康复"
+            factor["auto_recovered"] = True
+
+        # 记录恢复进度百分比（用于大模型参考）
+        recovery_percent = min(100, (duration / recovery_days) * 100)
+        factor["recovery_progress"] = round(recovery_percent, 1)
+        factor["estimated_recovery_days"] = max(0, recovery_days - duration)
+
+    # 在 DailyHealthRecorder 类中添加这个方法
+    def get_daily_archive_info(self, view_type: str = "summary") -> dict:
+        """
+        MCP工具：获取当日档案信息（整合已有方法）
+
+        Args:
+            view_type: 查看类型，可选值：
+                - "summary": 摘要信息（推荐）
+                - "full": 完整档案
+                - "meals": 餐次状态
+                - "plan": 今日计划
+                - "health": 健康状况
+
+        Returns:
+            整合的档案信息
+        """
+        try:
+            # 加载完整记录
+            full_data = self.load_today_record()
+
+            # 根据view_type返回不同信息
+            if view_type == "summary":
+                # 返回摘要信息
+                return {
+                    "success": True,
+                    "date": full_data.get("date", "未知日期"),
+                    "last_updated": full_data.get("last_updated", ""),
+                    "summary": self.get_today_summary(),
+                    "meal_status": {
+                        "早餐": full_data.get("早餐状态", ("没吃", ""))[0],
+                        "午餐": full_data.get("午餐状态", ("没吃", ""))[0],
+                        "晚餐": full_data.get("晚餐状态", ("没吃", ""))[0],
+                        "宵夜": full_data.get("宵夜状态", ("没吃", ""))[0]
+                    },
+                    "exercise_status": full_data.get("运动状态", ("没运动", ""))[0],
+                    "drink_progress": f"{full_data.get('drink_number', 0)}/{full_data.get('drink_plan', 8)}杯",
+                    "health_factors": self.get_factor_impact_summary()
+                }
+
+            elif view_type == "full":
+                # 返回完整档案（但隐藏一些内部字段）
+                result = full_data.copy()
+                # 移除不需要的字段
+                result.pop("daily_history", None)
+                return {
+                    "success": True,
+                    "data": result
+                }
+
+            elif view_type == "meals":
+                # 餐次详细信息
+                meals_info = {}
+                for meal in ["早餐", "午餐", "晚餐", "宵夜"]:
+                    status_field = f"{meal}状态"
+                    status_data = full_data.get(status_field, ("没吃", ""))
+                    status_text = status_data[0] if isinstance(status_data, tuple) else status_data
+
+                    # 获取食物信息
+                    food_info = {}
+                    if isinstance(status_data, tuple) and len(status_data) > 1:
+                        food_data = status_data[1]
+                        if isinstance(food_data, dict):
+                            food_info = food_data
+                        elif isinstance(food_data, list):
+                            food_info = {
+                                "record_count": len(food_data),
+                                "records": food_data[:5]  # 只返回前5条
+                            }
+
+                    meals_info[meal] = {
+                        "status": status_text,
+                        "food_info": food_info
+                    }
+
+                return {
+                    "success": True,
+                    "meals": meals_info
+                }
+
+            elif view_type == "plan":
+                # 今日计划信息
+                daily_plan = full_data.get("daily_plan", {})
+                return {
+                    "success": True,
+                    "food_plan": daily_plan.get("food", []),
+                    "movement_plan": daily_plan.get("movement", []),
+                    "created_at": daily_plan.get("created_at", "")
+                }
+
+            elif view_type == "health":
+                # 健康状况信息
+                health_info = {
+                    "factor_summary": self.get_factor_impact_summary(),
+                    "exercise_check": self.can_user_exercise_today(),
+                    "active_factors": self.get_active_negative_factors()
+                }
+
+                return {
+                    "success": True,
+                    "health": health_info
+                }
+
+            else:
+                return {
+                    "success": False,
+                    "message": f"不支持的查看类型: {view_type}",
+                    "valid_types": ["summary", "full", "meals", "plan", "health"]
+                }
+
+        except Exception as e:
+            return {
+                "success": False,
+                "message": f"获取档案信息失败: {str(e)}"
+            }

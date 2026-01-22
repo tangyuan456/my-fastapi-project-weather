@@ -608,21 +608,73 @@ def update_meal_status(self, user_input: str, meal_type: str = "auto", food_info
             old_status = old_tuple[0]  # 旧的用餐状态
             old_note = old_tuple[1] if len(old_tuple) > 1 else ""  # 旧的备注
 
-            print(f"🔍 [update_meal_status内部] 更新字段：{status_field}，从'{old_status}'改为'吃了'")
+            # 如果旧备注是字典（单个记录），转换为列表
+            old_records = []
+            if isinstance(old_note, dict) and old_note:  # 如果是字典且有内容
+                old_records = [old_note]  # 转换为列表，包含一个元素
+            elif isinstance(old_note, list):  # 如果已经是列表
+                old_records = old_note
+            elif old_note:  # 如果是其他非空值
+                # 尝试转换为字典格式
+                try:
+                    if isinstance(old_note, str):
+                        # 如果是JSON字符串
+                        import json
+                        try:
+                            old_note_dict = json.loads(old_note)
+                            if isinstance(old_note_dict, dict):
+                                old_records = [old_note_dict]
+                            elif isinstance(old_note_dict, list):
+                                old_records = old_note_dict
+                        except:
+                            # 如果不是JSON，创建简单记录
+                            old_records = [{"description": old_note}]
+                    else:
+                        # 其他类型，创建简单记录
+                        old_records = [{"description": str(old_note)}]
+                except:
+                    old_records = []
 
-            # 更新为新的元组
-            food_details = {}
+            print(f"🔍 [update_meal_status内部] 现有记录数量：{len(old_records)}")
+            for i, record in enumerate(old_records):
+                print(f"   记录{i + 1}: {record.get('description', '无描述')}")
+
+            current_time = datetime.datetime.now()
+
+            # 创建新的食物记录
+            new_record = {
+                "description": user_input,  # 使用用户输入作为描述
+                "timestamp": current_time.isoformat(),
+                "meal_type": detected_meal,
+                "record_index": len(old_records)  # 记录这是第几次进食
+            }
+
+            # 如果有食物分析信息，添加到记录中
             if food_info:
-                food_details = {
-                    "description": user_input,  # 使用用户输入作为描述
+                new_record.update({
                     "total_calories": food_info.get("total_calories", 0),
                     "protein_g": food_info.get("protein_g", 0),
                     "carbs_g": food_info.get("carbs_g", 0),
                     "fat_g": food_info.get("fat_g", 0),
-                    "analysis_time": current_time.isoformat()
-                }
+                    "calorie_range": food_info.get("calorie_range", ""),
+                    "details": food_info.get("details", []),
+                    "has_calorie_info": True
+                })
+            else:
+                new_record["has_calorie_info"] = False
 
-            today_data[status_field] = ("吃了", food_details)
+            updated_records = old_records.copy()  # 复制现有记录
+            updated_records.append(new_record)  # 追加新记录
+
+            print(f"✅ [update_meal_status内部] 新增记录，现在总共有 {len(updated_records)} 条{detected_meal}记录")
+
+            # 确定状态文本
+            if len(updated_records) == 1:
+                status_text = "吃了"
+            else:
+                status_text = f"吃了{len(updated_records)}次"  # 显示进食次数
+
+            today_data[status_field] = (status_text, updated_records)
 
             today_data["last_updated"] = current_time.isoformat()
 
@@ -781,6 +833,15 @@ def get_daily_plan(self, view_type: str = "current_meal") -> dict:
             "晚餐": today_data.get("晚餐状态", ("没吃", ""))[0]
         }
 
+        # 获取餐次详细记录
+        meal_records = {}
+        for meal in ["早餐", "午餐", "晚餐"]:
+            meal_data = today_data.get(f"{meal}状态", ("没吃", ""))
+            if len(meal_data) > 1 and isinstance(meal_data[1], list):
+                meal_records[meal] = meal_data[1]
+            else:
+                meal_records[meal] = []
+
         # 根据view_type返回不同的信息
         if view_type == "current_meal":
             # 只获取当前餐次的饮食计划
@@ -806,7 +867,9 @@ def get_daily_plan(self, view_type: str = "current_meal") -> dict:
                     "plan": current_meal_plan,
                     "meal_type": current_meal,
                     "current_time": current_time.strftime("%H:%M"),
-                    "meal_status": today_data.get(f"{current_meal}状态", ("没吃", ""))[0]
+                    "meal_status": today_data.get(f"{current_meal}状态", ("没吃", ""))[0],
+                    "meal_records_count": len(meal_records.get(current_meal, [])),
+                    "meal_records": meal_records.get(current_meal, [])
                 }
             else:
                 return {

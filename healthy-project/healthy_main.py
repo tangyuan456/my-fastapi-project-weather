@@ -189,7 +189,7 @@ class HealthAssistantBot:
                 "type": "function",
                 "function": {
                     "name": "get_daily_plan",
-                    "description": "获取用户当前时间段对应的饮食和运动计划。工具会根据当前时间自动判断是早餐、午餐还是晚餐时间，并返回相应的计划。也可以查看饮水目标和运动计划。",
+                    "description": "【当用户表达出要去吃饭或者进行运动时自动调用，给出进食或者运动计划】获取用户当前时间段对应的饮食和运动计划。工具会根据当前时间自动判断是早餐、午餐还是晚餐时间，并返回相应的计划。也可以查看饮水目标和运动计划。",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -313,6 +313,24 @@ class HealthAssistantBot:
                         "required": ["user_input"],
                     },
                 },
+            },{
+                "type": "function",
+                "function": {
+                    "name": "get_today_archive",
+                    "description": "【重要！用户询问今天情况时调用】查看当日的健康档案信息，包括餐次状态、运动状态、饮水情况、健康问题、今日总结等。用户想了解今日进展时，调用此工具获取全面信息。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "view_type": {
+                                "type": "string",
+                                "description": "查看的类型，可选值：summary（摘要，推荐）、meals（餐次详情）、plan（计划详情）、health（健康状况）",
+                                "enum": ["summary", "meals", "plan", "health"],
+                                "default": "summary"
+                            }
+                        },
+                        "required": ["view_type"],
+                    },
+                },
             }
         ]
 
@@ -353,6 +371,24 @@ class HealthAssistantBot:
 1. 直接调用 `calculate_food_calories`
 2. 分析结果并给出建议
 
+**场景3：用户表示使用系统为用户定制的餐食或相近意思**
+1. **第一步**：调用 `update_meal_status`
+   - 根据当前时间自动传入正确的 meal_type
+   - 示例：晚上19点 → meal_type="晚餐"
+
+2.  **第二步**：调用get_today_archive
+    -查看这一餐的定制餐食是什么
+    
+3. **第三步**：调用 `calculate_food_calories`
+   - 自动传入定制餐食
+   - meal_type与上一步保持一致
+   - **注意**：如果热量计算返回追问问题，直接显示给用户
+
+**注意**
+当用户已经吃了当前这一餐的情况下，询问他今天喝水了吗；
+如果他今天喝水杯数已经大于或等于今日目标杯数的一半，问他运动了吗
+
+
 ### 健康数据场景
 **场景3：用户需要健康建议**
 1. **第一步**：调用 `search_my_profile`（获取基础数据）
@@ -383,6 +419,14 @@ class HealthAssistantBot:
    - 问"全天计划" → "all"
    - 问"喝水" → "drink"
    - 问"运动" → "exercise"
+   
+**场景6：用户询问今日情况**
+- 调用 `get_today_archive`
+  - view_type选择规则：
+    - 问"今天怎么样"、"今日情况" → "summary"
+    - 问"吃了什么"、"三餐情况" → "meals"
+    - 问"今天计划"、"安排" → "plan"
+    - 问"健康状态"、"身体如何" → "health"
 
 ### 账户管理场景
 **场景6：新用户注册**
@@ -412,6 +456,7 @@ class HealthAssistantBot:
 2. **内容**：具体、详细、可操作
 3. **个性化**：基于用户数据定制
 4. **鼓励性**：时刻给予正向反馈
+5. **最后询问**：如果这样项服务已经结束，询问用户接下来要干什么
 
 ## 🌟 最佳实践示例
 
@@ -924,12 +969,131 @@ AI行动：
                 else:
                     return result.get("message", "标记康复失败")
 
+            elif function_name == "get_today_archive":
+                # 获取当日档案信息
+                view_type = arguments.get("view_type", "summary")
+
+                # 调用 recorder 的 get_daily_archive_info 方法
+                archive_info = self.recorder.get_daily_archive_info(view_type=view_type)
+
+                if archive_info.get("success"):
+                    # 根据不同的view_type生成友好的回复
+                    return self._format_archive_response(archive_info, view_type)
+                else:
+                    return archive_info.get("message", "获取档案信息失败")
+
             else:
                 return f"未知的工具函数: {function_name}"
 
         except Exception as e:
             print(f"❌ 工具执行错误: {e}")
             return f"执行操作时出现错误: {str(e)}"
+
+    def _format_archive_response(self, archive_info: dict, view_type: str) -> str:
+        """格式化档案信息的响应"""
+        try:
+            date = archive_info.get("date", "未知日期")
+
+            if view_type == "summary":
+                # 摘要信息格式化
+                meal_status = archive_info.get("meal_status", {})
+                exercise_status = archive_info.get("exercise_status", "未知")
+                drink_progress = archive_info.get("drink_progress", "0/8杯")
+                health_summary = archive_info.get("health_factors", "🎉 健康状况良好")
+
+                # 构建自然语言的摘要
+                meal_summary = []
+                for meal, status in meal_status.items():
+                    if status != "没吃":
+                        meal_summary.append(f"{meal}: {status}")
+
+                meal_text = "、".join(meal_summary) if meal_summary else "今日还未进食"
+
+                response = f"""📊 **今日健康档案摘要** ({date})
+
+🍽️ **餐次状态**: {meal_text}
+🏃 **运动状态**: {exercise_status}
+💧 **饮水进度**: {drink_progress}
+
+🩺 **健康状态**:
+{health_summary}"""
+
+                # 如果有今日总结，也加上
+                if "summary" in archive_info and archive_info["summary"]:
+                    response += f"\n\n📝 **今日总结**: {archive_info['summary']}"
+
+                return response
+
+            elif view_type == "meals":
+                # 餐次详细信息
+                meals = archive_info.get("meals", {})
+
+                response = f"🍽️ **今日餐次详情** ({date})\n\n"
+
+                for meal, info in meals.items():
+                    status = info.get("status", "没吃")
+                    food_info = info.get("food_info", {})
+
+                    response += f"**{meal}**: {status}\n"
+
+                    if status != "没吃":
+                        if isinstance(food_info, dict):
+                            if "description" in food_info:
+                                desc = food_info.get("description", "")
+                                response += f"   食物: {desc[:50]}\n"
+                            if "total_calories" in food_info and food_info["total_calories"] > 0:
+                                response += f"   热量: {food_info.get('total_calories', 0)}大卡\n"
+                            if "record_count" in food_info:
+                                response += f"   进食次数: {food_info['record_count']}次\n"
+
+                return response
+
+            elif view_type == "plan":
+                # 计划信息
+                food_plan = archive_info.get("food_plan", [])
+                movement_plan = archive_info.get("movement_plan", [])
+
+                response = f"📋 **今日健康计划** ({date})\n\n"
+
+                if food_plan:
+                    response += "🍽️ **饮食计划**:\n"
+                    for i, plan in enumerate(food_plan, 1):
+                        response += f"{i}. {plan}\n"
+                    response += "\n"
+
+                if movement_plan:
+                    response += "🏃 **运动计划**:\n"
+                    for i, plan in enumerate(movement_plan, 1):
+                        response += f"{i}. {plan}\n"
+
+                return response
+
+            elif view_type == "health":
+                # 健康信息
+                health = archive_info.get("health", {})
+                factor_summary = health.get("factor_summary", "暂无信息")
+                exercise_check = health.get("exercise_check", {})
+
+                response = f"🩺 **今日健康状况** ({date})\n\n"
+                response += "⚠️ **健康问题**:\n"
+                response += factor_summary + "\n"
+
+                if exercise_check:
+                    can_exercise = exercise_check.get("can_exercise", True)
+                    suggestion = exercise_check.get("suggestion", "")
+
+                    response += f"\n🏃 **运动建议**: "
+                    response += "✅ 可以运动" if can_exercise else "❌ 建议休息"
+                    if suggestion:
+                        response += f"（{suggestion}）"
+
+                return response
+
+            else:
+                return f"📁 获取了 {view_type} 类型的档案信息"
+
+        except Exception as e:
+            return f"❌ 格式化档案信息失败: {str(e)}"
 
     def chat(self, user_input: str) -> str:
         """主聊天函数"""
@@ -1058,7 +1222,8 @@ AI行动：
         today = datetime.datetime.now().strftime("%Y-%m-%d")
 
         # 构建文件路径（假设文件在当前目录下）
-        file_path = f"{today}.json"
+        daily_records_dir = "daily_records"
+        file_path = os.path.join(daily_records_dir, f"{today}.json")
 
         # 检查文件是否存在并输出
         if not os.path.exists(file_path):
@@ -1143,8 +1308,8 @@ AI行动：
                 if current_meal_status == "吃了":
                     # 如果已经吃了，显示确认信息
                     if index != 3:
-                        print(f"✅ 很好！看到你已经吃过{current_meal}了。可以告诉我你吃了什么吗？我将为你进行详细的营养分析哦！")
-                        self.history.append({"role": "assistant", "content": f"✅ 很好！看到你已经吃过{current_meal}了。可以告诉我你吃了什么吗？我将为你进行详细的营养分析哦！"})
+                        print(f"✅ 很好！看到你已经吃过{current_meal}了。你接下来要做什么呢？告诉我然后我会一直陪伴着你哦。")
+                        self.recorder.add_daily_history("assistant", f"✅ 很好！看到你已经吃过{current_meal}了。你接下来要做什么呢？告诉我然后我会一直陪伴着你哦。")
                     else:
                         print(f"{question}")
                         self.history.append({"role": "assistant", "content": question})
@@ -1158,14 +1323,19 @@ AI行动：
                     if "daily_plan" in today_data:
                         food_plan = today_data["daily_plan"].get("food", [])
                         print(f"\n📋 今日{current_meal}计划：{food_plan[index]}")
-                        self.history.append({"role": "assistant", "content": f"\n📋 今日{current_meal}计划：{food_plan[index]}"})
-
+                        plan_text = f"📋 今日{current_meal}计划：{food_plan[index]}"
+                        self.history.append({"role": "assistant", "content": plan_text})
+                        self.recorder.add_daily_history("assistant", plan_text)  # 新增这一行
 
             except Exception as e:
                 # 如果读取档案失败，使用默认的询问方式
                 print(f"{greeting}")
+                self.history.append({"role": "assistant", "content": greeting})
+                self.recorder.add_daily_history("assistant", greeting)
+
                 print(f"{question}")
-                print(f"你吃{current_meal}了吗？")
+                self.history.append({"role": "assistant", "content": question})
+                self.recorder.add_daily_history("assistant", question)
 
             while True:
                 user_input = input("\n您：").strip()
