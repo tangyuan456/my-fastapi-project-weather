@@ -26,14 +26,18 @@ from Exercise import ExerciseFunctions
 
 from Negative_Factor import NegativeFactorManager
 
+from ending import WeightLossJourneyAnalyzer
+
 # 禁用SSL警告
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # 配置开关
 USE_DATABASE = True  # 设置为True使用数据库，False使用JSON
 
-# 配置日志
+# 编码环境显示日志
 logging.basicConfig(level=logging.INFO, format='%(message)s')
+# 生产环境关闭日志
+#logging.getLogger("httpx").setLevel(logging.WARNING)
 
 class HealthAssistantBot:
     """健康减肥助手机器人（一对一版本）"""
@@ -89,7 +93,7 @@ class HealthAssistantBot:
         )
 
         self.diet_functions = DietFunctions(client=self.client, api_key=qwen_api_key)
-
+        self.journey_analyzer = WeightLossJourneyAnalyzer(self.client)
         self.users = load_profiles()
 
         # 定义工具 - 健康减肥相关功能
@@ -355,6 +359,26 @@ class HealthAssistantBot:
                         "required": ["action"],
                     },
                 },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "record_drink_water",
+                    "description": "【喝水记录】当用户说喝了水时调用此工具。可以自动识别用户说的喝水杯数，默认增加一杯。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "count": {
+                                "type": "integer",
+                                "description": "喝水杯数。如果用户明确说了数量就用用户说的，否则默认1",
+                                "minimum": 1,
+                                "maximum": 10,
+                                "default": 1
+                            }
+                        },
+                        "required": [],
+                    },
+                },
             }
         ]
 
@@ -390,6 +414,12 @@ class HealthAssistantBot:
    - 自动传入用户的完整描述
    - meal_type与上一步保持一致
    - **注意**：如果热量计算返回追问问题，直接显示给用户
+   
+### 运动相关场景
+**场景2：用户报告运动**
+1.**第一步**：调用 `update_exercise_status`
+2.**第二步**：调用 `calculate_exercise_calories`
+
 
 ### 健康数据场景
 **场景3：用户需要健康建议**
@@ -426,6 +456,18 @@ class HealthAssistantBot:
 1. 调用 `get_daily_plan`
 2. view_type选择"exercise"
 3.告诉用户今日运动计划
+
+**场景：用户报告喝水**
+- 调用 `record_drink_water`
+- count参数规则：
+  - 用户说"喝了水"、"喝水了" → count=1（默认）
+  - 用户说"喝了两杯水"、"喝了3杯水" → count=2或3
+  - 用户说"喝了好多水" → AI自行判断count=2或3
+
+示例：
+- "我喝水了" → record_drink_water(count=1)
+- "刚才喝了两杯水" → record_drink_water(count=2)
+- "下午喝了3杯水" → record_drink_water(count=3)
 
 ### 账户管理场景
 **场景6：新用户注册**
@@ -592,6 +634,20 @@ AI行动：
                         db_bridge.sync_weight_update(user_nickname, new_weight)
                         print(f"✅ 体重更新已同步到数据库")
                     # ========== 新增结束 ==========
+                    summary = self.journey_analyzer.check_and_generate_summary(new_weight)
+                    if summary:
+                        print("\n" + "🎉" * 30)
+                        print("🎉 恭喜！检测到你已经达到目标体重！ 🎉")
+                        print("🎉" * 30)
+                        print("\n你的坚持和努力得到了回报！这是一份为你准备的特别总结：\n")
+
+                        # 保存总结，稍后可以显示
+                        self.last_weight_loss_summary = summary
+
+                        # 询问用户是否要查看完整总结
+                        print("💡 我已经为你生成了完整的减肥历程总结报告！")
+                        print("   输入'查看减肥总结'可以查看详细报告")
+                        print("   报告已自动保存到文件，你可以随时查看")
                     return f"✅ 体重更新成功！\n📊 当前体重: {current_weight}kg\n📈 BMI: {bmi} ({status})"
                 else:
                     return "❌ 更新体重失败。"
@@ -1044,6 +1100,39 @@ AI行动：
 
                 except Exception as e:
                     return f"❌ 获取数据库信息失败: {e}"
+
+            elif function_name == "record_drink_water":
+                # 记录喝水 - 支持多杯
+                try:
+                    count = arguments.get("count", 1)
+
+                    if count < 1:
+                        return "❌ 请输入有效的喝水杯数"
+
+                    success = self.recorder.add_drink(count)
+
+                    if success:
+                        # 获取更新后的数据
+                        data = self.recorder.load_today_record()
+                        current = data.get("drink_number", 0)
+                        target = data.get("drink_plan", 8)
+
+                        # 根据杯数使用不同的表达
+                        if count == 1:
+                            drink_text = "一杯水"
+                        else:
+                            drink_text = f"{count}杯水"
+
+                        return f"""✅ 已记录喝了{drink_text}！
+
+            💧 今日喝水进度：{current}/{target}杯
+
+            💡 {'继续补充水分哦！' if current < target else '太棒了！已完成今日目标！🎉'}"""
+                    else:
+                        return "❌ 记录喝水失败"
+
+                except Exception as e:
+                    return f"❌ 记录喝水时出错: {str(e)}"
 
             else:
                 return f"未知的工具函数: {function_name}"

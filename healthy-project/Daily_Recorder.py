@@ -170,20 +170,32 @@ class DailyHealthRecorder:
             print(f"❌ 更新喝水记录失败: {e}")
             return False
 
-    def add_drink(self) -> bool:
-        """增加一杯水"""
+    def add_drink(self, count: int = 1, note: str = "") -> bool:
+        """
+        增加喝水杯数
+
+        Args:
+            count: 增加的杯数，默认为1
+            note: 备注信息
+
+        Returns:
+            是否成功
+        """
         try:
             data = self.load_today_record()
             current = data.get("drink_number", 0)
-            data["drink_number"] = current + 1
+            data["drink_number"] = current + count
 
             # 记录喝水时间
             if "drink_times" not in data:
                 data["drink_times"] = []
-            data["drink_times"].append({
-                "time": datetime.datetime.now().isoformat(),
-                "count": current + 1
-            })
+
+            for i in range(count):
+                data["drink_times"].append({
+                    "time": datetime.datetime.now().isoformat(),
+                    "count": current + i + 1,
+                    "note": note if i == 0 else ""  # 只给第一次记录加备注
+                })
 
             return self.save_today_record(data)
 

@@ -22,6 +22,7 @@ class ExerciseFunctions:
         """
         self.recorder = daily_recorder
         self.user_profile = user_profile
+        self._cache = {}
 
         # 运动卡路里数据库（每单位消耗卡路里）
         self.exercise_calories_db = {
@@ -193,10 +194,15 @@ class ExerciseFunctions:
             success = self.recorder.save_today_record(today_data)
 
             if success:
+                # 🔧 同时更新缓存
+                self._cache['exercise_status'] = ("运动了", exercise_records)
+                self._cache['today_data'] = today_data
+
                 response = {
                     "success": True,
                     "message": "✅ 已记录您的运动！" + (
-                        "并计算了消耗的卡路里。" if should_calculate_now else "现在为您计算消耗的卡路里..."),
+                        "并计算了消耗的卡路里。" if should_calculate_now else "为了计算卡路里消耗，请补充运动距离或时长信息。"),
+                    "cached": True,  # 标记使用了缓存
                     "exercise_type": analysis.get("detected_type", "未知"),
                 }
 
@@ -237,32 +243,23 @@ class ExerciseFunctions:
                                     record_index: int = 0) -> dict:
         """
         工具2：计算运动消耗的卡路里
-
-        Args:
-            user_input: 用户描述（可能是补充信息）
-            exercise_type: 运动类型
-            record_index: 要计算的记录索引（0表示最新记录）
-
-        Returns:
-            计算结果，可能包含追问问题
         """
         try:
-            # 检查是否有recorder对象
-            if not hasattr(self, 'recorder'):
-                return {
-                    "success": False,
-                    "message": "❌ 系统错误：找不到记录器"
-                }
-
-            # 加载今日记录
-            today_data = self.recorder.load_today_record()
-            exercise_status = today_data.get("运动状态", ("没运动", ""))
+            # 🔧 先检查缓存
+            if hasattr(self, '_cache') and 'exercise_status' in self._cache:
+                print("🔍 [计算卡路里] 使用缓存数据")
+                exercise_status = self._cache['exercise_status']
+                today_data = self._cache.get('today_data', {})
+            else:
+                # 从文件读取
+                today_data = self.recorder.load_today_record()
+                exercise_status = today_data.get("运动状态", ("没运动", ""))
 
             # 检查是否有运动记录
             if exercise_status[0] != "运动了":
                 return {
                     "success": False,
-                    "message": "❌ 今天还没有运动记录"
+                    "message": "❌ 今天还没有运动记录，请先记录您的运动"
                 }
 
             # 获取运动记录列表
@@ -283,53 +280,106 @@ class ExerciseFunctions:
             # 获取要计算的记录
             target_record = exercise_records[record_index]
 
-            # 分析用户输入（可能是补充信息）
-            analysis = self._analyze_exercise_input_with_context(user_input)
-            print(f"🔍 [calculate_exercise_calories] 分析结果: {analysis}")
+            # ============= 🔧 关键修复：检查是否需要追问 =============
+            # 1. 获取已有记录信息
+            existing_description = target_record.get("description", "")
+            existing_type = target_record.get("exercise_type", "")
+            existing_status = target_record.get("record_status", "")
 
-            # 如果需要追问，返回追问问题
+            print(f"🔍 [计算卡路里] 已有记录: {existing_description}")
+            print(f"🔍 [计算卡路里] 记录状态: {existing_status}")
+
+            # 2. 判断当前输入是否是补充信息
+            is_supplemental = any(word in user_input for word in ["大概", "大约", "左右", "公里", "km", "分钟", "min"])
+
+            # 3. 构建分析输入
+            if existing_description and is_supplemental:
+                # 补充信息：合并到已有描述（参考饮食函数的合并逻辑）
+                combined_input = f"{existing_description}补充：{user_input}"
+                print(f"🔍 [计算卡路里] 合并输入: {combined_input}")
+            else:
+                # 非补充信息：直接使用当前输入
+                combined_input = user_input
+                print(f"🔍 [计算卡路里] 直接使用: {combined_input}")
+
+            # 4. 分析输入
+            analysis = self._analyze_exercise_input_with_context(combined_input)
+            print(f"🔍 [分析结果] 类型: {analysis.get('detected_type')}")
+            print(f"🔍 [分析结果] 距离: {analysis.get('distance_km')}")
+            print(f"🔍 [分析结果] 时间: {analysis.get('duration_min')}")
+            print(f"🔍 [分析结果] 需要追问: {analysis.get('needs_clarification')}")
+
+            # 5. 如果分析需要追问，直接返回追问问题
             if analysis.get("needs_clarification", False):
+                questions = analysis.get("clarification_questions", [])
+                if not questions:
+                    # 根据运动类型生成追问
+                    ex_type = analysis.get("detected_type", "其他")
+                    if ex_type in ["跑步", "步行", "骑行", "游泳"]:
+                        questions = [f"您{ex_type}了多远距离？（如：5公里）"]
+                    elif ex_type in ["跳绳", "瑜伽", "健身", "羽毛球", "篮球", "足球"]:
+                        questions = [f"您{ex_type}了多长时间？（如：30分钟）"]
+                    else:
+                        questions = ["能详细描述一下您的运动情况吗？"]
+
                 return {
                     "success": False,
                     "needs_clarification": True,
                     "message": "为了准确计算卡路里，请补充运动信息：",
-                    "questions": analysis.get("clarification_questions", []),
+                    "questions": questions,
                     "suggestion": "请回答上述问题，我会为您计算消耗的卡路里。",
                     "record_index": record_index,
-                    "is_followup": analysis.get("is_followup", False)
+                    "is_followup": True
                 }
 
-            # 计算卡路里
+            # 6. 检查信息是否足够
+            ex_type = analysis.get("detected_type", "其他")
+            distance_km = analysis.get("distance_km")
+            duration_min = analysis.get("duration_min")
+
+            # 对于步行/跑步等需要距离的运动
+            if ex_type in ["步行", "跑步", "骑行", "游泳"] and distance_km is None:
+                return {
+                    "success": False,
+                    "needs_clarification": True,
+                    "message": f"需要补充{ex_type}的距离信息：",
+                    "questions": [f"您{ex_type}了多远距离？（如：5公里）"],
+                    "suggestion": "请提供具体的距离信息。",
+                    "record_index": record_index,
+                    "is_followup": True
+                }
+
+            # 7. 计算卡路里
             calories_result = self._calculate_calories_from_analysis(analysis)
 
             if not calories_result.get("success", False):
                 return calories_result
 
-            # 更新记录中的卡路里信息
+            # 8. 更新记录
             target_record.update({
                 "calories_burned": calories_result["total_calories"],
-                "distance_km": analysis.get("distance_km", target_record.get("distance_km")),
-                "duration_min": analysis.get("duration_min", target_record.get("duration_min")),
-                "exercise_type": analysis.get("detected_type", target_record.get("exercise_type")),
+                "distance_km": distance_km,
+                "duration_min": duration_min,
+                "exercise_type": ex_type,
                 "calculation_method": calories_result.get("calculation_method", "估算"),
                 "record_status": "已计算卡路里",
-                "calories_calculated_at": datetime.datetime.now().isoformat()
+                "calories_calculated_at": datetime.datetime.now().isoformat(),
+                "description": combined_input  # 保存合并后的描述
             })
 
             # 更新记录列表
             exercise_records[record_index] = target_record
             today_data["运动状态"] = ("运动了", exercise_records)
 
-            # 保存更新后的记录
+            # 保存
             success = self.recorder.save_today_record(today_data)
 
             if success:
-                # 构建详细回复
                 response = {
                     "success": True,
                     "message": f"🔥 运动卡路里计算完成！",
                     "total_calories": calories_result["total_calories"],
-                    "exercise_type": analysis.get("detected_type", "未知"),
+                    "exercise_type": ex_type,
                     "calculation_method": calories_result.get("calculation_method", "估算"),
                     "explanation": calories_result.get("explanation", ""),
                     "today_total": self._calculate_today_total_calories(exercise_records)
@@ -519,11 +569,32 @@ class ExerciseFunctions:
         Returns:
             分析结果
         """
-        # 获取上下文
-        previous_input = self._get_recent_exercise_context()
-        print(f"🔍 [运动分析] 找到上下文输入：{previous_input}")
+        # 先初始化变量
+        is_followup = False
+        combined_for_analysis = user_input
 
-        user_input_lower = user_input.lower()
+        # 首先检查输入是否包含"补充："标记（这是从calculate_exercise_calories传过来的）
+        if "补充：" in user_input:
+            # 分割主描述和补充信息
+            parts = user_input.split("补充：")
+            main_part = parts[0].strip().rstrip('。')
+            supplement_part = parts[1].strip() if len(parts) > 1 else ""
+
+            print(f"🔍 [上下文分析] 检测到补充信息:")
+            print(f"   主描述: {main_part}")
+            print(f"   补充信息: {supplement_part}")
+
+            # 将补充信息合并到分析中（用逗号连接，参考饮食函数）
+            if supplement_part:
+                combined_for_analysis = f"{main_part}，{supplement_part}"  # 🔧 改用逗号
+            else:
+                combined_for_analysis = main_part
+            is_followup = True
+            print(f"🔄 [上下文分析] 合并后: {combined_for_analysis}")
+        else:
+            combined_for_analysis = user_input
+
+        user_input_lower = combined_for_analysis.lower()
 
         # 检查是否提到计划运动（更宽泛的识别）
         mentions_plan_exercise = any(phrase in user_input_lower for phrase in [
@@ -559,8 +630,8 @@ class ExerciseFunctions:
                 print(f"🔍 [运动分析] 构建详细描述: {detailed_description}")
 
                 # 使用这个详细描述进行分析
-                user_input = detailed_description
-                print(f"🔍 [运动分析] 更新用户输入为: {user_input}")
+                combined_for_analysis = detailed_description
+                print(f"🔍 [运动分析] 更新用户输入为: {combined_for_analysis}")
             else:
                 # 无法提取计划信息，需要返回明确的追问
                 print(f"🔍 [运动分析] 无法提取计划信息，返回追问")
@@ -578,24 +649,18 @@ class ExerciseFunctions:
                     "is_followup": False
                 }
 
-        # 判断当前输入是否是补充信息
-        is_followup = False
-        if previous_input:
-            # 检查当前输入是否是补充信息
+        # 如果不是"补充："格式，但可能是简短补充信息
+        if not is_followup and user_input and len(user_input.strip()) < 30:
+            # 简短输入可能是补充信息
             is_followup = any(
-                word in user_input for word in ["大概", "大约", "左右", "分钟", "小时", "公里", "km", "min", "h"]
-            ) or any(word in user_input for word in ["补充", "还有", "另外", "加上"])
-
-        # 合并输入
-        if is_followup and previous_input:
-            # 如果是补充信息，合并两次输入
-            combined_input = f"{previous_input}。补充：{user_input}"
-            print(f"🔍 [运动分析] 合并上下文：{combined_input}")
-        else:
-            combined_input = user_input
+                word in user_input for word in
+                ["大概", "大约", "左右", "分钟", "小时", "公里", "km", "min", "h", "5公里", "40分钟"]
+            )
+            if is_followup:
+                print(f"🔍 [上下文分析] 检测到简短补充信息: {user_input}")
 
         # 使用合并后的输入进行分析
-        return self._analyze_exercise_input(combined_input, is_followup)
+        return self._analyze_exercise_input(combined_for_analysis, is_followup)
 
     def _analyze_exercise_input(self, full_input: str, is_followup: bool = False) -> Dict[str, Any]:
         """
