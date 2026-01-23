@@ -8,24 +8,32 @@ import json
 import urllib3
 import io
 from contextlib import redirect_stdout
+from user_manager_sqlite import UserManagerSQLite
+from database_bridge import db_bridge
+import logging
 
 from websocket import continuous_frame
 
-from 初次录入 import (load_profiles, save_profiles, create_user_profile, delete_user_profile,
-                      search_user_profile, update_user_weight, calculate_bmi, USER_PROFILES)
-from 每日记录相关函数 import DailyHealthRecorder
+from First_Entry import (load_profiles, save_profiles, create_user_profile, delete_user_profile,
+                         search_user_profile, update_user_weight, calculate_bmi, USER_PROFILES)
+from Daily_Recorder import DailyHealthRecorder
 
-from 饮食相关函数 import (update_meal_status,get_daily_plan,DietFunctions)
+from Diet import (update_meal_status, get_daily_plan, DietFunctions)
 
-from 历史总结相关函数 import HistorySummaryManager
+from History_Summary import HistorySummaryManager
 
-from 运动相关函数 import ExerciseFunctions
+from Exercise import ExerciseFunctions
 
-from 负面因子 import NegativeFactorManager
+from Negative_Factor import NegativeFactorManager
 
 # 禁用SSL警告
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
+# 配置开关
+USE_DATABASE = True  # 设置为True使用数据库，False使用JSON
+
+# 配置日志
+logging.basicConfig(level=logging.INFO, format='%(message)s')
 
 class HealthAssistantBot:
     """健康减肥助手机器人（一对一版本）"""
@@ -33,6 +41,23 @@ class HealthAssistantBot:
     def __init__(self, qwen_api_key: str):
         self.qwen_api_key = qwen_api_key
         self.current_user = None  # 当前登录的用户
+        # ========== 新增：数据库状态展示 ==========
+        print("\n" + "=" * 50)
+        print("🗄️  数据库系统状态")
+        print("=" * 50)
+        if db_bridge.connected:
+            user_count = db_bridge.get_user_count()
+            print(f"✅ 数据库连接成功")
+            print(f"📊 数据库中有 {user_count} 个用户")
+
+            # 可选：显示数据库中的用户
+            if user_count > 0:
+                print("👥 数据库用户列表:")
+                # 这里可以添加显示逻辑
+        else:
+            print("⚠️  数据库未连接，使用纯JSON系统")
+        print("=" * 50 + "\n")
+        # ========== 新增结束 ==========
         self.recorder = DailyHealthRecorder()
         self.users = load_profiles()
         self.update_meal_status = update_meal_status.__get__(self, HealthAssistantBot)
@@ -65,7 +90,6 @@ class HealthAssistantBot:
 
         self.diet_functions = DietFunctions(client=self.client, api_key=qwen_api_key)
 
-        # 加载用户数据
         self.users = load_profiles()
 
         # 定义工具 - 健康减肥相关功能
@@ -313,22 +337,22 @@ class HealthAssistantBot:
                         "required": ["user_input"],
                     },
                 },
-            },{
+            },
+            {
                 "type": "function",
                 "function": {
-                    "name": "get_today_archive",
-                    "description": "【重要！用户询问今天情况时调用】查看当日的健康档案信息，包括餐次状态、运动状态、饮水情况、健康问题、今日总结等。用户想了解今日进展时，调用此工具获取全面信息。",
+                    "name": "show_database_info",
+                    "description": "【演示功能】显示数据库系统信息和统计，展示数据库集成成果。在答辩或演示时使用。",
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "view_type": {
+                            "action": {
                                 "type": "string",
-                                "description": "查看的类型，可选值：summary（摘要，推荐）、meals（餐次详情）、plan（计划详情）、health（健康状况）",
-                                "enum": ["summary", "meals", "plan", "health"],
-                                "default": "summary"
+                                "description": "执行的动作，固定为'show'",
+                                "enum": ["show"]
                             }
                         },
-                        "required": ["view_type"],
+                        "required": ["action"],
                     },
                 },
             }
@@ -367,28 +391,6 @@ class HealthAssistantBot:
    - meal_type与上一步保持一致
    - **注意**：如果热量计算返回追问问题，直接显示给用户
 
-**场景2：用户询问食物热量**
-1. 直接调用 `calculate_food_calories`
-2. 分析结果并给出建议
-
-**场景3：用户表示使用系统为用户定制的餐食或相近意思**
-1. **第一步**：调用 `update_meal_status`
-   - 根据当前时间自动传入正确的 meal_type
-   - 示例：晚上19点 → meal_type="晚餐"
-
-2.  **第二步**：调用get_today_archive
-    -查看这一餐的定制餐食是什么
-    
-3. **第三步**：调用 `calculate_food_calories`
-   - 自动传入定制餐食
-   - meal_type与上一步保持一致
-   - **注意**：如果热量计算返回追问问题，直接显示给用户
-
-**注意**
-当用户已经吃了当前这一餐的情况下，询问他今天喝水了吗；
-如果他今天喝水杯数已经大于或等于今日目标杯数的一半，问他运动了吗
-
-
 ### 健康数据场景
 **场景3：用户需要健康建议**
 1. **第一步**：调用 `search_my_profile`（获取基础数据）
@@ -411,7 +413,7 @@ class HealthAssistantBot:
 2. 然后基于工具返回的建议回答
 
 ### 日常计划场景
-**场景5：用户询问计划**
+**场景5：用户询问计划或用户表示即将去吃饭/喝水/运动**
 1. 调用 `get_daily_plan`
 2. view_type选择规则：
    - 问"现在该吃什么" → "current_meal"
@@ -419,14 +421,11 @@ class HealthAssistantBot:
    - 问"全天计划" → "all"
    - 问"喝水" → "drink"
    - 问"运动" → "exercise"
-   
-**场景6：用户询问今日情况**
-- 调用 `get_today_archive`
-  - view_type选择规则：
-    - 问"今天怎么样"、"今日情况" → "summary"
-    - 问"吃了什么"、"三餐情况" → "meals"
-    - 问"今天计划"、"安排" → "plan"
-    - 问"健康状态"、"身体如何" → "health"
+
+示例：用户输入：我接下来要去运动
+1. 调用 `get_daily_plan`
+2. view_type选择"exercise"
+3.告诉用户今日运动计划
 
 ### 账户管理场景
 **场景6：新用户注册**
@@ -559,6 +558,14 @@ AI行动：
                     # 更新本地用户数据
                     self.users = load_profiles()
                     self.current_user = user_data.get('nickname')
+                    # ========== 新增：同步到数据库 ==========
+                    if db_bridge.connected:
+                        # 提取昵称（假设user_data格式为 {'昵称': 'xxx', ...}）
+                        nickname = user_data.get('昵称') or user_data.get('nickname')
+                        if nickname:
+                            db_bridge.sync_user_creation(nickname, user_data)
+                            print(f"✅ 用户数据已同步到数据库: {nickname}")
+                    # ========== 新增结束 ==========
                     return f"✅ 成功创建您的个人健康档案！欢迎 {self.current_user}，从现在开始我会陪伴您的健康减肥之旅！"
                 else:
                     return "❌ 创建健康档案失败或您取消了操作。"           #
@@ -574,13 +581,17 @@ AI行动：
                 if new_weight <= 0:
                     return "请输入有效的体重值。"
 
-                # 调用update_user_weight函数（注意：原函数需要nickname参数）
                 success = update_user_weight(user_nickname, new_weight)
                 if success:
                     self.users = load_profiles()  # 重新加载数据
                     current_weight = self.users[user_nickname]['current_weight_kg']
                     bmi = self.users[user_nickname]['bmi']
                     status = self.users[user_nickname]['status']
+                    # ========== 新增：同步到数据库 ==========
+                    if db_bridge.connected:
+                        db_bridge.sync_weight_update(user_nickname, new_weight)
+                        print(f"✅ 体重更新已同步到数据库")
+                    # ========== 新增结束 ==========
                     return f"✅ 体重更新成功！\n📊 当前体重: {current_weight}kg\n📈 BMI: {bmi} ({status})"
                 else:
                     return "❌ 更新体重失败。"
@@ -688,18 +699,39 @@ AI行动：
                     if isinstance(result, dict):
                         if result.get("success"):
                             response = result.get("message", "📋 您的计划：")
-                            if "plan" in result:
+                            if "movement_plan" in result:
+                                movement_plan = result["movement_plan"]
+                                if isinstance(movement_plan, list):
+                                    for item in movement_plan:
+                                        response += f"\n  • {item}"
+                            elif "plan" in result:
                                 plan = result["plan"]
                                 if isinstance(plan, list):
                                     for item in plan:
                                         response += f"\n  • {item}"
                                 else:
                                     response += f"\n  • {plan}"
+
+                            elif "food_plan" in result:
+                                food_plan = result["food_plan"]
+                                if isinstance(food_plan, list):
+                                    response += "\n🍽️ **饮食计划**:"
+                                    for item in food_plan:
+                                        response += f"\n  • {item}"
+
+                                if "movement_plan" in result:
+                                    movement_plan = result["movement_plan"]
+                                    if isinstance(movement_plan, list):
+                                        response += "\n\n🏃 **运动计划**:"
+                                        for item in movement_plan:
+                                            response += f"\n  • {item}"
+
                             if "meal_status" in result:
                                 status = result["meal_status"]
                                 response += f"\n\n🍽️ 用餐状态："
                                 for meal, stat in status.items():
                                     response += f"\n  • {meal}: {stat}"
+                            #print(f"今日计划：{response}")
                             return response
                         else:
                             return result.get("message", "❌ 获取计划失败")
@@ -969,18 +1001,49 @@ AI行动：
                 else:
                     return result.get("message", "标记康复失败")
 
-            elif function_name == "get_today_archive":
-                # 获取当日档案信息
-                view_type = arguments.get("view_type", "summary")
+            elif function_name == "show_database_info":
+                """演示数据库功能（新增工具，可选）"""
+                if not db_bridge.connected:
+                    return "❌ 数据库未连接"
 
-                # 调用 recorder 的 get_daily_archive_info 方法
-                archive_info = self.recorder.get_daily_archive_info(view_type=view_type)
+                try:
+                    # 获取数据库信息
+                    user_count = db_bridge.get_user_count()
 
-                if archive_info.get("success"):
-                    # 根据不同的view_type生成友好的回复
-                    return self._format_archive_response(archive_info, view_type)
-                else:
-                    return archive_info.get("message", "获取档案信息失败")
+                    # 获取表信息
+                    db_bridge.db.cursor.execute("""
+                        SELECT name FROM sqlite_master 
+                        WHERE type='table' 
+                        ORDER BY name
+                    """)
+                    tables = db_bridge.db.cursor.fetchall()
+
+                    response = f"""🗄️ **数据库系统信息**
+
+            📊 **基础信息**
+            • 数据库状态: ✅ 已连接
+            • 用户数量: {user_count} 个
+            • 数据库文件: health_assistant.db
+
+            📋 **数据表结构**
+            """
+                    for table in tables:
+                        response += f"• {table['name']}\n"
+
+                    response += f"""
+            💡 **技术特点**
+            • 使用SQLite轻量级数据库
+            • 与JSON系统双向同步
+            • 支持快速查询和统计
+            • 为未来扩展奠定基础
+
+            🎯 **答辩展示**
+            此项功能展示了我在7天内学习并集成的数据库技术！"""
+
+                    return response
+
+                except Exception as e:
+                    return f"❌ 获取数据库信息失败: {e}"
 
             else:
                 return f"未知的工具函数: {function_name}"
@@ -1398,6 +1461,9 @@ AI行动：
             5. 🔄 重新开始
                • 输入："删除档案"
                • 输入："重新开始"
+               
+            6. 数据库演示功能：
+               • "查看数据库信息" - 展示数据库集成成果
 
             其他命令：
             • "菜单" - 显示此菜单

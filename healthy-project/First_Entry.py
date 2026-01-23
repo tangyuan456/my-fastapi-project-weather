@@ -35,7 +35,8 @@ DIET_OPTIONS = {
     'I': '广东菜系',
     'J': '川菜湘菜',
     'K': '江浙菜系',
-    'L': '北方菜系'
+    'L': '北方菜系',
+    'M': '其他，自填'
 }
 
 ALLERGEN_OPTIONS = {
@@ -50,7 +51,7 @@ ALLERGEN_OPTIONS = {
     'I': '海鲜',
     'J': '芒果',
     'K': '酒精',
-    'L': '其他，自写',
+    'L': '其他，自填',
     'M': '无'
 }
 
@@ -277,13 +278,23 @@ def create_user_profile() -> Optional[Dict[str, Any]]:
         diet_list = get_multiple_choice_input(
             "\n7. 请选择您的饮食习惯（可多选）:", DIET_OPTIONS, allow_multiple=True
         )
+        if "其他，自填" in diet_list:
+            diet_list.remove("其他，自填")
+            custom_diet = input("   请输入您的其他饮食习惯: ").strip()
+            if custom_diet:
+                diet_list.append(custom_diet)
         user_data['diet_preferences'] = diet_list
 
         # 10. 过敏原（多选，可选）
-        print("\n8. 过敏食物（可选，直接回车跳过）")
+        print("\n8. 过敏食物")
         allergen_list = get_multiple_choice_input(
             "   请选择过敏食物（可多选）:", ALLERGEN_OPTIONS, allow_multiple=True
         )
+        if "其他，自填" in allergen_list:
+            allergen_list.remove("其他，自填")
+            custom_allergen = input("   请输入您的其他过敏食物: ").strip()
+            if custom_allergen:
+                allergen_list.append(custom_allergen)
         user_data['allergens'] = allergen_list
 
 
@@ -293,12 +304,22 @@ def create_user_profile() -> Optional[Dict[str, Any]]:
         movement_list = get_multiple_choice_input(
             "   请选择你喜欢的运动方式（可多选）:", MOVEMENT_OPTIONS, allow_multiple=True
         )
+        if "其他，自填" in movement_list:
+            # 移除"其他，自填"这个选项
+            movement_list.remove("其他，自填")
+
+            # 让用户输入自定义运动
+            custom_sport = input("   请输入您喜欢的其他运动: ").strip()
+            if custom_sport:
+                movement_list.append(custom_sport)
+        additional_terms = ["散步"]  # 你可以自定义要添加的词
+        movement_list += additional_terms
         user_data['move_prefer'] = movement_list
 
         # 12. 其他备注
         print("\n10. 其他备注（可选）:")
         print("   如：特殊疾病史、服药情况、运动限制等")
-        remarks = input("请输入备注（如无可直接回车）: ").strip()
+        remarks = input("请输入备注: ").strip()
         if remarks:
             user_data['remarks'] = remarks
 

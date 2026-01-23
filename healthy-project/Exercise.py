@@ -77,6 +77,13 @@ class ExerciseFunctions:
             }
         }
 
+        # 运动计划识别关键词
+        self.plan_completion_keywords = [
+            "完成你安排的", "完成计划", "按计划完成",
+            "系统安排", "定制计划", "今天安排的",
+            "做完了你安排的", "完成了你建议的", "按你安排的"
+        ]
+
     # ==================== 工具1：更新运动状态 ====================
 
     def update_exercise_status(self, user_input: str, exercise_type: str = "auto") -> dict:
@@ -277,7 +284,8 @@ class ExerciseFunctions:
             target_record = exercise_records[record_index]
 
             # 分析用户输入（可能是补充信息）
-            analysis = self._analyze_exercise_input_with_context(user_input, target_record.get("description", ""))
+            analysis = self._analyze_exercise_input_with_context(user_input)
+            print(f"🔍 [calculate_exercise_calories] 分析结果: {analysis}")
 
             # 如果需要追问，返回追问问题
             if analysis.get("needs_clarification", False):
@@ -342,6 +350,130 @@ class ExerciseFunctions:
             }
 
     # ==================== 辅助函数 ====================
+    def _extract_plan_based_exercise_info(self) -> Dict[str, Any]:
+        """
+        从今日计划中提取运动信息
+
+        返回包含运动类型、时长等信息的字典
+        """
+        try:
+            # 加载今日记录
+            today_data = self.recorder.load_today_record()
+            daily_plan = today_data.get("daily_plan", {})
+
+            # 检查是否有运动计划
+            movement_plan = daily_plan.get("movement", [])
+            if not movement_plan:
+                print("🔍 [计划提取] 今日无运动计划")
+                return {}
+
+            print(f"🔍 [计划提取] 原始运动计划: {movement_plan}")
+
+            # 合并所有运动计划文本用于分析
+            plan_text = " ".join([str(item) for item in movement_plan])
+
+            # 1. 提取运动类型
+            detected_type = "其他"
+            for ex_type, data in self.exercise_calories_db.items():
+                for keyword in data["keywords"]:
+                    if keyword in plan_text.lower():
+                        detected_type = ex_type
+                        print(f"🔍 [计划提取] 检测到运动类型: {detected_type}")
+                        break
+                if detected_type != "其他":
+                    break
+
+            # 2. 提取时长（分钟）
+            duration_min = None
+            time_patterns = [
+                (r'(\d+)\s*分钟', lambda x: int(x)),
+                (r'(\d+)\s*min', lambda x: int(x)),
+                (r'(\d+)\s*小时', lambda x: int(x) * 60),
+                (r'(\d+)\s*h', lambda x: int(x) * 60),
+                (r'(\d+)\s*刻钟', lambda x: int(x) * 15),
+                (r'半个?小时', lambda x: 30),
+            ]
+
+            for pattern, converter in time_patterns:
+                match = re.search(pattern, plan_text.lower())
+                if match:
+                    try:
+                        duration_min = converter(match.group(1) if match.group(1) else "1")
+                        print(f"🔍 [计划提取] 提取时长: {duration_min}分钟")
+                        break
+                    except:
+                        continue
+
+            # 3. 提取距离（公里）
+            distance_km = None
+            distance_patterns = [
+                (r'(\d+(?:\.\d+)?)\s*公里', lambda x: float(x)),
+                (r'(\d+(?:\.\d+)?)\s*km', lambda x: float(x)),
+                (r'(\d+)\s*千米', lambda x: float(x)),
+            ]
+
+            for pattern, converter in distance_patterns:
+                match = re.search(pattern, plan_text.lower())
+                if match:
+                    try:
+                        distance_km = converter(match.group(1))
+                        print(f"🔍 [计划提取] 提取距离: {distance_km}公里")
+                        break
+                    except:
+                        continue
+
+            # 如果没有明确提取到时长，但检测到需要时间的运动类型，给默认值
+            if duration_min is None and detected_type in ["瑜伽", "健身", "跳绳", "羽毛球", "篮球", "足球"]:
+                # 从计划文本中估算
+                if "30" in plan_text or "半小时" in plan_text:
+                    duration_min = 30
+                elif "40" in plan_text:
+                    duration_min = 40
+                elif "60" in plan_text or "1小时" in plan_text:
+                    duration_min = 60
+                elif "20" in plan_text:
+                    duration_min = 20
+                else:
+                    duration_min = 30  # 默认30分钟
+                print(f"🔍 [计划提取] 设置默认时长: {duration_min}分钟")
+
+            result = {
+                "detected_type": detected_type,
+                "duration_min": duration_min,
+                "distance_km": distance_km,
+                "from_plan": True,
+                "plan_text": plan_text[:100]  # 截取部分文本
+            }
+
+            print(f"🔍 [计划提取] 最终提取结果: {result}")
+            return result
+
+        except Exception as e:
+            print(f"❌ 提取计划信息失败: {e}")
+            return {}
+
+    def _is_plan_completion_statement(self, user_input: str) -> bool:
+        """
+        判断是否是完成计划的声明
+        """
+        user_input_lower = user_input.lower()
+
+        # 检查是否包含完成关键词
+        has_completion = any(keyword in user_input_lower for keyword in ["完成", "做完", "做完了", "结束了"])
+
+        # 检查是否提到计划或安排
+        has_plan_reference = any(phrase in user_input_lower for phrase in self.plan_completion_keywords)
+
+        # 或者是简短声明（如"好了"、"完成了"）
+        is_brief_statement = len(user_input.strip()) < 20 and any(
+            word in user_input_lower for word in ["好了", "完成了", "做完", "结束"]
+        )
+
+        result = (has_completion and has_plan_reference) or is_brief_statement
+        if result:
+            print(f"🔍 [计划判断] 识别为计划完成语句: {user_input}")
+        return result
+
     def _get_recent_exercise_context(self, limit: int = 10) -> Optional[str]:
         """
         获取最近的与运动相关的对话上下文
@@ -390,6 +522,61 @@ class ExerciseFunctions:
         # 获取上下文
         previous_input = self._get_recent_exercise_context()
         print(f"🔍 [运动分析] 找到上下文输入：{previous_input}")
+
+        user_input_lower = user_input.lower()
+
+        # 检查是否提到计划运动（更宽泛的识别）
+        mentions_plan_exercise = any(phrase in user_input_lower for phrase in [
+            "计划运动", "按计划", "按你给的", "按你的计划",
+            "你安排", "你给的计划", "你的计划", "系统计划",
+            "按照你给的计划", "按系统安排", "定制计划", "按计划运动"
+        ])
+
+        if mentions_plan_exercise or self._is_plan_completion_statement(user_input):
+            print(f"🔍 [运动分析] 检测到计划相关语句: {user_input}")
+
+            # 尝试从计划中提取运动信息
+            plan_info = self._extract_plan_based_exercise_info()
+
+            if plan_info and plan_info.get("detected_type") != "其他":
+                print(f"🔍 [运动分析] 成功提取计划信息: {plan_info}")
+
+                # 构建详细描述
+                description_parts = []
+                if plan_info.get("detected_type"):
+                    description_parts.append(f"{plan_info['detected_type']}")
+                if plan_info.get("duration_min"):
+                    description_parts.append(f"{plan_info['duration_min']}分钟")
+                if plan_info.get("distance_km"):
+                    description_parts.append(f"{plan_info['distance_km']}公里")
+
+                # 创建完整的运动描述
+                if description_parts:
+                    detailed_description = "按计划完成了" + "".join(description_parts)
+                else:
+                    detailed_description = f"完成了{plan_info['detected_type']}运动"
+
+                print(f"🔍 [运动分析] 构建详细描述: {detailed_description}")
+
+                # 使用这个详细描述进行分析
+                user_input = detailed_description
+                print(f"🔍 [运动分析] 更新用户输入为: {user_input}")
+            else:
+                # 无法提取计划信息，需要返回明确的追问
+                print(f"🔍 [运动分析] 无法提取计划信息，返回追问")
+                return {
+                    "detected_type": "其他",
+                    "distance_km": None,
+                    "duration_min": None,
+                    "needs_clarification": True,
+                    "clarification_questions": [
+                        "我找到了您的运动计划，但需要确认具体信息：",
+                        "您具体完成了计划中的什么运动？",
+                        "运动了多长时间或距离是多少？"
+                    ],
+                    "full_input": user_input,
+                    "is_followup": False
+                }
 
         # 判断当前输入是否是补充信息
         is_followup = False
