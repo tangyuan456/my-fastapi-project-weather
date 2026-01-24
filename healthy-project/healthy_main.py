@@ -417,9 +417,18 @@ class HealthAssistantBot:
    
 ### 运动相关场景
 **场景2：用户报告运动**
-1.**第一步**：调用 `update_exercise_status`
-2.**第二步**：调用 `calculate_exercise_calories`
+1. **首先调用** `update_exercise_status`
+   - 这是唯一需要调用的工具
+   - 它会完成所有工作：记录运动+计算卡路里（如果信息完整）
+   
+2. **检查工具返回结果**：
+   - 如果返回中有 `"needs_calorie_calculation": false` → 已经计算完成，直接回复用户
+   - 如果返回中有 `"needs_calorie_calculation": true` → 询问用户补充信息
+   - 如果返回中有 `"needs_clarification": true` → 显示追问问题给用户
+   
+3. **重要规则**：调用`update_exercise_status`后，**不要自动调用**`calculate_exercise_calories`！
 
+4. **注意**：当你输出给用户看时，哪怕工具没有返回卡路里，你也要估算给用户看
 
 ### 健康数据场景
 **场景3：用户需要健康建议**
@@ -933,78 +942,129 @@ AI行动：
                     print(f"❌ 热量计算异常: {e}")
                     return f"❌ 热量分析时出现错误: {str(e)}\n请重新描述食物。"
 
+
             elif function_name == "update_exercise_status":
+
                 # 更新运动状态
+
                 user_input = arguments.get("user_input", "")
+
                 exercise_type = arguments.get("exercise_type", "auto")
 
                 result = self.exercise_functions.update_exercise_status(user_input, exercise_type)
 
                 # 格式化返回结果
+
                 if isinstance(result, dict):
+
                     if result.get("success"):
+
                         response = result.get("message", "✅ 运动状态已更新")
 
                         # 如果需要计算卡路里，提示下一步
+
                         if result.get("needs_calorie_calculation"):
                             response += f"\n\n🔢 检测到您进行了{result.get('exercise_type', '运动')}，正在为您计算消耗的卡路里..."
 
                         return response
+
                     else:
+
                         # 处理追问情况
+
                         if result.get("needs_clarification"):
+
                             response = result.get("message", "需要更多信息来记录运动：")
+
                             questions = result.get("questions", [])
+
                             for i, question in enumerate(questions, 1):
                                 response += f"\n{i}. {question}"
+
                             response += f"\n\n{result.get('suggestion', '请回答上述问题，我会为您记录这次运动。')}"
+
                             return response
+
                         else:
+
                             return result.get("message", "❌ 更新运动状态失败")
+
                 else:
+
                     return str(result)
 
+
             elif function_name == "calculate_exercise_calories":
+
                 # 计算运动卡路里
+
                 user_input = arguments.get("user_input", "")
+
                 exercise_type = arguments.get("exercise_type", "auto")
+
                 record_index = arguments.get("record_index", 0)
 
                 result = self.exercise_functions.calculate_exercise_calories(
+
                     user_input, exercise_type, record_index
+
                 )
 
                 # 格式化返回结果
+
                 if isinstance(result, dict):
+
                     if result.get("success"):
+
                         total_cal = result.get("total_calories", 0)
+
                         exercise_type = result.get("exercise_type", "运动")
+
                         explanation = result.get("explanation", "")
 
                         response = f"""🔥 **运动卡路里计算完成！**
 
-            🏃 **运动类型**：{exercise_type}
-            💪 **消耗热量**：**{total_cal}大卡**
-            📊 **计算方法**：{result.get('calculation_method', '估算')}
-            📈 **计算依据**：{explanation}"""
+
+                        🏃 **运动类型**：{exercise_type}
+
+                        💪 **消耗热量**：**{total_cal}大卡**
+
+                        📊 **计算方法**：{result.get('calculation_method', '估算')}
+
+                        📈 **计算依据**：{explanation}"""
 
                         # 添加今日总计
+
                         today_total = result.get("today_total", 0)
+
                         if today_total > 0:
                             response += f"\n\n📅 **今日运动总计**：{today_total}大卡"
+
                         return response
+
                     else:
+
                         # 处理追问情况
+
                         if result.get("needs_clarification"):
+
                             response = result.get("message", "需要更多信息来计算卡路里：")
+
                             questions = result.get("questions", [])
+
                             for i, question in enumerate(questions, 1):
                                 response += f"\n{i}. {question}"
+
                             response += f"\n\n{result.get('suggestion', '请回答上述问题，我会为您计算卡路里。')}"
+
                             return response
+
                         else:
+
                             return result.get("message", "❌ 计算卡路里失败")
+
                 else:
+
                     return str(result)
 
             elif function_name == "detect_and_record_negative_factors":
