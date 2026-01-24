@@ -1,5 +1,4 @@
 import datetime
-from idlelib import history
 import os
 import httpx
 import ssl
@@ -12,7 +11,6 @@ from user_manager_sqlite import UserManagerSQLite
 from database_bridge import db_bridge
 import logging
 
-from websocket import continuous_frame
 
 from First_Entry import (load_profiles, save_profiles, create_user_profile, delete_user_profile,
                          search_user_profile, update_user_weight, calculate_bmi, USER_PROFILES)
